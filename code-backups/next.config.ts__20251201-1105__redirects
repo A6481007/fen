@@ -1,0 +1,40 @@
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  /* config options here */
+
+  // Force legacy /news/downloads traffic onto /catalog with a 301 to keep a single canonical target; legacy queries are dropped intentionally.
+  async redirects() {
+    return [
+      {
+        source: "/news/downloads",
+        destination: "/catalog",
+        permanent: true,
+        statusCode: 301,
+      },
+      {
+        source: "/news/downloads/:path*",
+        destination: "/catalog",
+        permanent: true,
+        statusCode: 301,
+      },
+    ];
+  },
+
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "cdn.sanity.io",
+      },
+    ],
+  },
+  // typescript: {
+  //   ignoreBuildErrors: true,
+  // },
+  // eslint: {
+  //   ignoreDuringBuilds: true,
+  // },
+};
+
+export default nextConfig;

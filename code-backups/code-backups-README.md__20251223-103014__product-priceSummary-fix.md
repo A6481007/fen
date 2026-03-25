@@ -1,0 +1,1 @@
+Backup before fixing empty priceSummary object schema error in productType. File: sanity/schemaTypes/productType.ts -> code-backups/sanity__schemaTypes__productType.ts__2025-12-23_10-30-14_priceSummary-fix.ts. Created 2025-12-23 10:30:14.

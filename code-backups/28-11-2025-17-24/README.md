@@ -1,0 +1,1 @@
+- sanity/helpers/index.ts -> sanity__helpers__index.ts__2025-11-28__access-control.ts (reason: add access helpers export)

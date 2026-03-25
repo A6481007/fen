@@ -1,0 +1,1 @@
+Backup before removing JSX from sanity.config.ts logo component to satisfy Vite/esbuild parse error (Expected ">" but found "style"). Source: sanity.config.ts. Backup file: sanity.config.ts__2025-12-23_10-16-53_logo-logo-jsx-fix.ts. Created 2025-12-23 10:16:53.

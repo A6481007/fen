@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isServiceAccount() {
+      return isSignedIn() &&
+        (request.auth.token.admin == true ||
+          request.auth.token.role == 'service' ||
+          request.auth.token.role == 'backend');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && userId == request.auth.uid;
+    }
+
+    match /cartAbandonments/{docId} {
+      allow read: if isOwner(resource.data.userId) || isServiceAccount();
+      allow create: if isServiceAccount() || isOwner(request.resource.data.userId);
+      allow update: if isServiceAccount() || isOwner(resource.data.userId);
+      allow delete: if isServiceAccount();
+    }
+
+    match /promotions/{promotionId} {
+      allow read: if true;
+      allow write: if isServiceAccount();
+
+      match /variantAssignments/{assignmentId} {
+        allow read: if isServiceAccount() || isSignedIn();
+        allow create, update: if isServiceAccount() || isOwner(request.resource.data.userId);
+        allow delete: if isServiceAccount();
+      }
+
+      match /interactions/{interactionId} {
+        allow read: if isServiceAccount();
+        allow create: if isServiceAccount() || isSignedIn();
+        allow update, delete: if isServiceAccount();
+      }
+
+      match /analytics/{docId=**} {
+        allow read, write: if isServiceAccount();
+      }
+    }
+
+    match /rateLimits/{docId} {
+      allow read, write: if isServiceAccount();
+    }
+
+    match /smsRateLimits/{docId} {
+      allow read, write: if isServiceAccount();
+    }
+
+    match /users/{userId}/promotions/{campaignId} {
+      allow read: if isOwner(userId) || isServiceAccount();
+      allow write: if isServiceAccount();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

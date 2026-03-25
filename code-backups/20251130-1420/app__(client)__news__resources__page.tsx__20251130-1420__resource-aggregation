@@ -1,0 +1,122 @@
+import Container from "@/components/Container";
+import DynamicBreadcrumb from "@/components/DynamicBreadcrumb";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { getNewsResources } from "@/sanity/queries";
+import { ArrowRight, BookOpenCheck } from "lucide-react";
+import Link from "next/link";
+
+const ResourcesPage = async () => {
+  const resources = await getNewsResources();
+  const grouped = resources.reduce<Record<string, typeof resources>>((acc, item) => {
+    const category = item?.resourceCategory || "Guides";
+    if (!acc[category]) {
+      acc[category] = [];
+    }
+    acc[category].push(item);
+    return acc;
+  }, {});
+
+  const orderedCategories = Object.keys(grouped).sort();
+
+  return (
+    <div className="min-h-screen bg-white">
+      <Container className="pt-6">
+        <DynamicBreadcrumb
+          customItems={[
+            { label: "News", href: "/news" },
+            { label: "Resources" },
+          ]}
+        />
+      </Container>
+
+      <Container className="py-8 sm:py-12 space-y-8">
+        <div className="space-y-2 text-center sm:text-left">
+          <Badge className="bg-amber-500 text-white">Resources</Badge>
+          <h1 className="text-3xl font-bold text-shop_dark_green">
+            Knowledge base & enablement docs
+          </h1>
+          <p className="text-gray-600 max-w-2xl">
+            Make onboarding easier with curated guides, FAQs, and policy notes.
+          </p>
+        </div>
+
+        {resources?.length ? (
+          <div className="space-y-8">
+            {orderedCategories.map((category) => (
+              <Card key={category} className="border border-gray-100 shadow-sm">
+                <CardContent className="space-y-4 py-6">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.25em] text-gray-400">
+                        Category
+                      </p>
+                      <h2 className="text-2xl font-semibold text-shop_dark_green">
+                        {category}
+                      </h2>
+                    </div>
+                    <BookOpenCheck className="h-6 w-6 text-shop_light_green" />
+                  </div>
+                  <Separator />
+                  <div className="space-y-4">
+                    {grouped[category].map((resource) => (
+                      <div
+                        key={resource?._id}
+                        className="rounded-lg bg-shop_light_bg/60 p-4 transition hover:bg-shop_light_bg"
+                      >
+                        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                          <div>
+                            <Link href={`/news/${resource?.slug?.current}`}>
+                              <h3 className="text-xl font-semibold text-shop_dark_green hover:text-shop_light_green">
+                                {resource?.title}
+                              </h3>
+                            </Link>
+                            <p className="text-sm text-gray-600">
+                              {resource?.summary ||
+                                "Actionable insight from the product enablement team."}
+                            </p>
+                          </div>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            {resource?.resourceLink && (
+                              <Link
+                                href={resource.resourceLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm font-semibold text-shop_light_green hover:text-shop_dark_green"
+                              >
+                                Open Link
+                                <ArrowRight className="ml-1 inline h-4 w-4" />
+                              </Link>
+                            )}
+                            <Link
+                              href={`/news/${resource?.slug?.current}`}
+                              className="text-sm font-semibold text-shop_dark_green hover:text-shop_light_green"
+                            >
+                              Read more
+                              <ArrowRight className="ml-1 inline h-4 w-4" />
+                            </Link>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Card className="p-10 text-center">
+            <CardContent>
+              <p className="text-gray-600">
+                We&apos;re drafting our first knowledge pack. Come back soon.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+      </Container>
+    </div>
+  );
+};
+
+export default ResourcesPage;

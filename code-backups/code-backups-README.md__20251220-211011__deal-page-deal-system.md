@@ -1,0 +1,1 @@
+Backup created for app/(client)/deal/page.tsx before migrating deal page to new deal system (switching to getDealsAndLegacyHotProducts, adding featured deals grid, analytics tracking, and SEO tweaks). Restore the copied file in this folder if the new deal page fails.

@@ -1,0 +1,306 @@
+import Container from "@/components/Container";
+import DynamicBreadcrumb from "@/components/DynamicBreadcrumb";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { urlFor } from "@/sanity/lib/image";
+import { getAllNews } from "@/sanity/queries";
+import dayjs from "dayjs";
+import {
+  Calendar,
+  Clock,
+  ArrowRight,
+  BookOpen,
+  Megaphone,
+  Download,
+} from "lucide-react";
+import Image from "next/image";
+import Link from "next/link";
+
+const FILTERS = [
+  { key: "all", label: "All" },
+  { key: "article", label: "Articles" },
+  { key: "event", label: "Events" },
+  { key: "resource", label: "Resources" },
+];
+
+const NewsPage = async ({
+  searchParams,
+}: {
+  searchParams?: { type?: string };
+}) => {
+  const newsItems = (await getAllNews(12)) ?? [];
+  const activeFilter = searchParams?.type ?? "all";
+
+  const calculateReadingTime = (text: string) => {
+    if (!text) return 2;
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    return Math.max(1, Math.ceil(words / 200));
+  };
+
+  const extractDescription = (
+    body: unknown,
+    maxLength: number = 180
+  ): string => {
+    if (!Array.isArray(body)) return "Fresh updates from the newsroom.";
+    let description = "";
+    for (const block of body) {
+      if (block && typeof block === "object" && block._type === "block") {
+        const children = Array.isArray(block.children) ? block.children : [];
+        for (const child of children) {
+          if (child && child._type === "span" && child.text) {
+            description += `${child.text} `;
+            if (description.length > maxLength) {
+              return `${description.substring(0, maxLength).trim()}...`;
+            }
+          }
+        }
+      }
+    }
+    return (
+      description.trim() || "Dive into announcements, launches, and product notes."
+    );
+  };
+
+  const getNewsExcerpt = (item: Record<string, any>) =>
+    item?.summary?.trim() || extractDescription(item?.body || []);
+
+  const getReadingTime = (item: Record<string, any>) =>
+    calculateReadingTime(getNewsExcerpt(item));
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-shop_light_bg to-white">
+      {/* Breadcrumb */}
+      <Container className="pt-6">
+        <DynamicBreadcrumb
+          customItems={[{ label: "News", href: "/news" }]}
+        />
+      </Container>
+
+      {/* Hero Section */}
+      <Container className="py-8 sm:py-12">
+        <Card className="bg-gradient-to-r from-shop_dark_green to-shop_light_green text-white border-0 shadow-xl overflow-hidden">
+          <CardContent className="p-6 sm:p-8 lg:p-12 text-center">
+            <div className="max-w-3xl mx-auto space-y-6">
+              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-1 text-sm font-semibold uppercase tracking-wide">
+                <Megaphone className="h-4 w-4" /> News Hub
+              </div>
+              <div>
+                <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold mb-3">
+                  Product News & Updates
+                </h1>
+                <p className="text-sm sm:text-base md:text-lg text-white/90">
+                  Feature launches, press moments, and release highlights from
+                  the team. Bookmark this hub to stay ahead of what we ship
+                  next.
+                </p>
+              </div>
+
+              {/* News Stats */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="rounded-xl bg-white/10 p-4 text-left">
+                  <p className="text-xs uppercase tracking-widest text-white/80">
+                    Published items
+                  </p>
+                  <p className="text-2xl font-bold">
+                    {newsItems.length.toString().padStart(2, "0")}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white/10 p-4 text-left">
+                  <p className="text-xs uppercase tracking-widest text-white/80">
+                    Downloads
+                  </p>
+                  <p className="text-2xl font-bold">Assets live</p>
+                </div>
+                <div className="rounded-xl bg-white/10 p-4 text-left">
+                  <p className="text-xs uppercase tracking-widest text-white/80">
+                    Events this month
+                  </p>
+                  <p className="text-2xl font-bold">On demand</p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </Container>
+
+      {/* News Grid */}
+      <Container className="py-8 sm:py-12">
+        <div className="mb-8">
+          <div className="flex flex-col gap-2">
+            <h2 className="text-2xl sm:text-3xl font-bold text-shop_dark_green">
+              Latest News & Highlights
+            </h2>
+            <p className="text-gray-600">
+              Launch recaps, press statements, and release notes curated for
+              partners and customers.
+            </p>
+          </div>
+        </div>
+
+        {/* Filter Strip */}
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+          <div>
+            <h3 className="text-lg font-semibold text-shop_dark_green">
+              Browse by type
+            </h3>
+            <p className="text-sm text-gray-600">
+              Articles, events, and evergreen resources.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {FILTERS.map((filter) => {
+              const isActive = activeFilter === filter.key;
+              const href =
+                filter.key === "all" ? "/news" : `/news?type=${filter.key}`;
+              return (
+                <Link key={filter.key} href={href} scroll={false}>
+                  <Badge
+                    variant={isActive ? "default" : "outline"}
+                    className={isActive ? "shadow-sm" : "bg-white"}
+                  >
+                    {filter.label}
+                  </Badge>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+
+        {newsItems.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {newsItems.map((newsItem, index) => (
+              <Card
+                key={newsItem?._id ?? index}
+                className={`group hover:shadow-xl transition-all duration-300 hover:-translate-y-1 overflow-hidden border border-gray-100 ${
+                  index === 0 ? "md:col-span-2 lg:col-span-2" : ""
+                }`}
+              >
+                {newsItem?.mainImage && (
+                  <div className="relative overflow-hidden">
+                    <Image
+                      src={urlFor(newsItem.mainImage).url()}
+                      alt={newsItem?.title || "News image"}
+                      width={500}
+                      height={300}
+                      className={`w-full object-cover transition-transform duration-300 group-hover:scale-105 ${
+                        index === 0 ? "h-64 md:h-80" : "h-48 md:h-56"
+                      }`}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent" />
+                    <Link
+                      href={`/news/${newsItem?.slug?.current}`}
+                      className="absolute inset-0"
+                    />
+                    {newsItem?.blogcategories?.length ? (
+                      <Badge className="absolute top-4 left-4 bg-shop_dark_green hover:bg-shop_light_green">
+                        {newsItem.blogcategories[0]?.title}
+                      </Badge>
+                    ) : null}
+                  </div>
+                )}
+                <CardContent className="p-4 sm:p-6">
+                  <div className="flex items-center gap-4 text-xs sm:text-sm text-gray-500 mb-3">
+                    <div className="flex items-center gap-1">
+                      <Calendar size={14} />
+                      {dayjs(newsItem?.publishedAt).format("MMM D, YYYY")}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Clock size={14} />
+                      {getReadingTime(newsItem)} min read
+                    </div>
+                  </div>
+                  <Link
+                    href={`/news/${newsItem?.slug?.current}`}
+                    className="block group/title"
+                  >
+                    <h3
+                      className={`font-bold text-shop_dark_green group-hover/title:text-shop_light_green transition-colors duration-200 line-clamp-2 leading-tight ${
+                        index === 0
+                          ? "text-lg sm:text-xl md:text-2xl mb-3"
+                          : "text-base sm:text-lg mb-2"
+                      }`}
+                    >
+                      {newsItem?.title}
+                    </h3>
+                  </Link>
+                  <p className="text-gray-600 text-sm mb-4 line-clamp-3">
+                    {getNewsExcerpt(newsItem)}
+                  </p>
+                  <Separator className="my-3" />
+                  <Link
+                    href={`/news/${newsItem?.slug?.current}`}
+                    className="inline-flex items-center gap-2 text-sm font-medium text-shop_light_green hover:text-shop_dark_green transition-colors duration-200 group/link"
+                  >
+                    Read More
+                    <ArrowRight
+                      size={14}
+                      className="transition-transform duration-200 group-hover/link:translate-x-1"
+                    />
+                  </Link>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Card className="p-8 sm:p-12 text-center">
+            <div className="flex flex-col items-center gap-4">
+              <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gray-100 rounded-full flex items-center justify-center">
+                <BookOpen className="w-8 h-8 sm:w-10 sm:h-10 text-gray-400" />
+              </div>
+              <div>
+                <h3 className="text-lg sm:text-xl font-semibold text-gray-900 mb-2">
+                  No News Yet
+                </h3>
+                <p className="text-sm sm:text-base text-gray-600 mb-4">
+                  We&apos;re preparing our first release briefs. Check back soon!
+                </p>
+                <Button asChild>
+                  <Link href="/">
+                    <Download className="mr-2 h-4 w-4" /> Return Home
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          </Card>
+        )}
+      </Container>
+
+      {/* Newsletter Section */}
+      <Container className="py-8 sm:py-12">
+        <Card className="bg-gradient-to-r from-shop_light_pink to-light-orange/20 border-0">
+          <CardContent className="p-6 sm:p-8 lg:p-12 text-center">
+            <div className="max-w-2xl mx-auto">
+              <BookOpen className="w-12 h-12 text-shop_dark_green mx-auto mb-4" />
+              <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-shop_dark_green mb-4">
+                Stay in the loop
+              </h2>
+              <p className="text-sm sm:text-base text-gray-600 mb-6">
+                Subscribe to product notes, media kits, and launch invite drops.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center max-w-md mx-auto">
+                <Button
+                  size="lg"
+                  className="bg-shop_dark_green hover:bg-shop_light_green w-full sm:w-auto"
+                >
+                  Get News Updates
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="border-shop_dark_green text-shop_dark_green hover:bg-shop_dark_green hover:text-white w-full sm:w-auto"
+                  asChild
+                >
+                  <Link href="/news/resources">Browse Resources</Link>
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </Container>
+    </div>
+  );
+};
+
+export default NewsPage;

@@ -1,0 +1,5336 @@
+APPENDIX: SOURCE DUMP FOR actions
+
+================================================================================
+FILE: actions/adminWithdrawalActions.ts
+
+"use server";
+
+import { auth } from "@clerk/nextjs/server";
+import { backendClient } from "@/sanity/lib/backendClient";
+import { isAdmin } from "@/lib/adminUtils";
+
+/**
+ * Admin: Get all pending withdrawal requests
+ */
+export async function getAllWithdrawalRequests(): Promise<{
+  success: boolean;
+  requests?: Array<{
+    id: string;
+    userId: string;
+    userName: string;
+    userEmail: string;
+    amount: number;
+    method: string;
+    bankDetails?: any;
+    paypalEmail?: string;
+    status: string;
+    requestedAt: string;
+    processedAt?: string;
+    processedBy?: string;
+    rejectionReason?: string;
+  }>;
+  message?: string;
+}> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Verify admin status - check both database field and environment variable
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ email, isAdmin }`,
+      { clerkUserId }
+    );
+
+    if (!isAdmin(adminUser)) {
+      return {
+        success: false,
+        message: "Admin access required to view withdrawal requests",
+      };
+    }
+
+    // Get all users with pending withdrawals
+    const users = await backendClient.fetch(
+      `*[_type == "user" && defined(withdrawalRequests) && count(withdrawalRequests) > 0]{
+        _id,
+        clerkUserId,
+        name,
+        email,
+        withdrawalRequests
+      }`
+    );
+
+    const allRequests: any[] = [];
+
+    users.forEach((user: any) => {
+      user.withdrawalRequests.forEach((request: any) => {
+        allRequests.push({
+          ...request,
+          userId: user.clerkUserId,
+          userName: user.name,
+          userEmail: user.email,
+        });
+      });
+    });
+
+    // Sort by requested date (newest first)
+    allRequests.sort(
+      (a, b) =>
+        new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+    );
+
+    return {
+      success: true,
+      requests: allRequests,
+    };
+  } catch (error) {
+    console.error("Error fetching withdrawal requests:", error);
+    return { success: false, message: "Failed to fetch withdrawal requests" };
+  }
+}
+
+/**
+ * Admin: Approve withdrawal request
+ */
+export async function approveWithdrawal(
+  userId: string,
+  requestId: string,
+  transactionId?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Verify admin status - check both database field and environment variable
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ email, isAdmin }`,
+      { clerkUserId }
+    );
+
+    if (!isAdmin(adminUser)) {
+      return {
+        success: false,
+        message: "Admin access required to approve withdrawals",
+      };
+    }
+
+    // Get user and withdrawal request
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $userId][0]{ 
+        _id, 
+        walletBalance, 
+        withdrawalRequests
+      }`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    const request = user.withdrawalRequests.find(
+      (r: any) => r.id === requestId
+    );
+
+    if (!request) {
+      return { success: false, message: "Withdrawal request not found" };
+    }
+
+    if (request.status !== "pending") {
+      return {
+        success: false,
+        message: "Only pending requests can be approved",
+      };
+    }
+
+    // Update withdrawal request status
+    const updatedRequests = user.withdrawalRequests.map((r: any) =>
+      r.id === requestId
+        ? {
+            ...r,
+            status: "processing",
+            processedAt: new Date().toISOString(),
+            processedBy: adminUser.email,
+            transactionId: transactionId || "",
+          }
+        : r
+    );
+
+    await backendClient
+      .patch(user._id)
+      .set({ withdrawalRequests: updatedRequests })
+      .commit();
+
+    return {
+      success: true,
+      message: "Withdrawal approved and processing",
+    };
+  } catch (error) {
+    console.error("Error approving withdrawal:", error);
+    return { success: false, message: "Failed to approve withdrawal" };
+  }
+}
+
+/**
+ * Admin: Complete withdrawal (after funds transferred)
+ */
+export async function completeWithdrawal(
+  userId: string,
+  requestId: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Verify admin status - check both database field and environment variable
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ email, isAdmin }`,
+      { clerkUserId }
+    );
+
+    if (!isAdmin(adminUser)) {
+      return {
+        success: false,
+        message: "Admin access required to complete withdrawals",
+      };
+    }
+
+    // Get user
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $userId][0]{ 
+        _id, 
+        withdrawalRequests
+      }`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    const request = user.withdrawalRequests.find(
+      (r: any) => r.id === requestId
+    );
+
+    if (!request) {
+      return { success: false, message: "Withdrawal request not found" };
+    }
+
+    if (request.status !== "processing") {
+      return {
+        success: false,
+        message: "Only processing requests can be completed",
+      };
+    }
+
+    // Update withdrawal request status
+    const updatedRequests = user.withdrawalRequests.map((r: any) =>
+      r.id === requestId
+        ? {
+            ...r,
+            status: "completed",
+            processedAt: new Date().toISOString(),
+            processedBy: adminUser.email,
+          }
+        : r
+    );
+
+    await backendClient
+      .patch(user._id)
+      .set({ withdrawalRequests: updatedRequests })
+      .commit();
+
+    return {
+      success: true,
+      message: "Withdrawal marked as completed",
+    };
+  } catch (error) {
+    console.error("Error completing withdrawal:", error);
+    return { success: false, message: "Failed to complete withdrawal" };
+  }
+}
+
+/**
+ * Admin: Reject withdrawal request
+ */
+export async function rejectWithdrawal(
+  userId: string,
+  requestId: string,
+  reason: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Verify admin status - check both database field and environment variable
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ email, isAdmin }`,
+      { clerkUserId }
+    );
+
+    if (!isAdmin(adminUser)) {
+      return {
+        success: false,
+        message: "Admin access required to reject withdrawals",
+      };
+    }
+
+    // Get user
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $userId][0]{ 
+        _id, 
+        withdrawalRequests
+      }`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    const request = user.withdrawalRequests.find(
+      (r: any) => r.id === requestId
+    );
+
+    if (!request) {
+      return { success: false, message: "Withdrawal request not found" };
+    }
+
+    if (request.status !== "pending") {
+      return {
+        success: false,
+        message: "Only pending requests can be rejected",
+      };
+    }
+
+    // Update withdrawal request status
+    const updatedRequests = user.withdrawalRequests.map((r: any) =>
+      r.id === requestId
+        ? {
+            ...r,
+            status: "rejected",
+            processedAt: new Date().toISOString(),
+            processedBy: adminUser.email,
+            rejectionReason: reason,
+          }
+        : r
+    );
+
+    await backendClient
+      .patch(user._id)
+      .set({ withdrawalRequests: updatedRequests })
+      .commit();
+
+    return {
+      success: true,
+      message: "Withdrawal request rejected",
+    };
+  } catch (error) {
+    console.error("Error rejecting withdrawal:", error);
+    return { success: false, message: "Failed to reject withdrawal" };
+  }
+}
+
+
+================================================================================
+FILE: actions/emailUserActions.ts
+
+"use server";
+
+import { auth, currentUser } from "@clerk/nextjs/server";
+import { revalidatePath } from "next/cache";
+import { client } from "@/sanity/lib/client";
+
+// Types for server actions
+interface CreateAddressData {
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+  isDefault?: boolean;
+}
+
+interface CartItem {
+  productId: string;
+  quantity: number;
+  size?: string;
+  color?: string;
+}
+
+// Address Management Actions (Email-based)
+export async function createAddressForUser(addressData: CreateAddressData) {
+  try {
+    const { userId } = await auth();
+    const user = await currentUser();
+
+    if (!userId || !user) {
+      throw new Error("User not authenticated");
+    }
+
+    const userEmail = user.emailAddresses[0]?.emailAddress;
+    if (!userEmail) {
+      throw new Error("User email not found");
+    }
+
+    // If this is set as default, unset all other default addresses for this email
+    if (addressData.isDefault) {
+      const existingAddresses = await client.fetch(
+        `*[_type == "address" && email == $email]`,
+        { email: userEmail }
+      );
+
+      for (const address of existingAddresses) {
+        await client.patch(address._id).set({ default: false }).commit();
+      }
+    }
+
+    // Create new address
+    const newAddress = await client.create({
+      _type: "address",
+      name: addressData.name,
+      email: userEmail,
+      address: addressData.address,
+      city: addressData.city,
+      state: addressData.state.toUpperCase(),
+      zip: addressData.zip,
+      default: addressData.isDefault || false,
+      createdAt: new Date().toISOString(),
+    });
+
+    revalidatePath("/cart");
+    return { success: true, addressId: newAddress._id };
+  } catch (error) {
+    console.error("Error creating address:", error);
+    throw new Error("Failed to create address");
+  }
+}
+
+export async function updateAddressForUser(
+  addressId: string,
+  addressData: CreateAddressData
+) {
+  try {
+    const { userId } = await auth();
+    const user = await currentUser();
+
+    if (!userId || !user) {
+      throw new Error("User not authenticated");
+    }
+
+    const userEmail = user.emailAddresses[0]?.emailAddress;
+    if (!userEmail) {
+      throw new Error("User email not found");
+    }
+
+    // Verify the address belongs to the user
+    const existingAddress = await client.fetch(
+      `*[_type == "address" && _id == $addressId && email == $email][0]`,
+      { addressId, email: userEmail }
+    );
+
+    if (!existingAddress) {
+      throw new Error("Address not found or unauthorized");
+    }
+
+    // If this is set as default, unset all other default addresses for this email
+    if (addressData.isDefault) {
+      const otherAddresses = await client.fetch(
+        `*[_type == "address" && email == $email && _id != $addressId]`,
+        { email: userEmail, addressId }
+      );
+
+      for (const address of otherAddresses) {
+        await client.patch(address._id).set({ default: false }).commit();
+      }
+    }
+
+    // Update the address
+    await client
+      .patch(addressId)
+      .set({
+        name: addressData.name,
+        address: addressData.address,
+        city: addressData.city,
+        state: addressData.state.toUpperCase(),
+        zip: addressData.zip,
+        default: addressData.isDefault || false,
+      })
+      .commit();
+
+    revalidatePath("/cart");
+    return { success: true };
+  } catch (error) {
+    console.error("Error updating address:", error);
+    throw new Error("Failed to update address");
+  }
+}
+
+export async function deleteAddressForUser(addressId: string) {
+  try {
+    const { userId } = await auth();
+    const user = await currentUser();
+
+    if (!userId || !user) {
+      throw new Error("User not authenticated");
+    }
+
+    const userEmail = user.emailAddresses[0]?.emailAddress;
+    if (!userEmail) {
+      throw new Error("User email not found");
+    }
+
+    // Verify the address belongs to the user
+    const existingAddress = await client.fetch(
+      `*[_type == "address" && _id == $addressId && email == $email][0]`,
+      { addressId, email: userEmail }
+    );
+
+    if (!existingAddress) {
+      throw new Error("Address not found or unauthorized");
+    }
+
+    // Delete the address
+    await client.delete(addressId);
+
+    revalidatePath("/cart");
+    return { success: true };
+  } catch (error) {
+    console.error("Error deleting address:", error);
+    throw new Error("Failed to delete address");
+  }
+}
+
+// Cart simulation actions (since we're using Zustand for cart management)
+// These could be extended to use a server-side cart in the future
+export async function simulateAddToCart(item: CartItem) {
+  // For now, this would be handled by client-side Zustand
+  // But this structure allows for future server-side cart management
+  return { success: true };
+}
+
+export async function getUserEmailFromClerk() {
+  try {
+    const { userId } = await auth();
+    const user = await currentUser();
+
+    if (!userId || !user) {
+      return null;
+    }
+
+    return user.emailAddresses[0]?.emailAddress || null;
+  } catch (error) {
+    console.error("Error getting user email:", error);
+    return null;
+  }
+}
+
+
+================================================================================
+FILE: actions/employeeActions.ts
+
+"use server";
+
+import { auth } from "@clerk/nextjs/server";
+import { backendClient } from "@/sanity/lib/backendClient";
+import {
+  Employee,
+  EmployeeRole,
+  EmployeeStatus,
+  ROLE_PERMISSIONS,
+} from "@/types/employee";
+
+// Assign employee role to a user
+export async function assignEmployeeRole(
+  userId: string,
+  role: EmployeeRole
+): Promise<{ success: boolean; message: string; employee?: Employee }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Get admin user to verify permissions
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId }
+    );
+
+    if (!adminUser) {
+      return { success: false, message: "Admin user not found" };
+    }
+
+    // Get user to assign role to
+    const user = await backendClient.fetch(
+      `*[_type == "user" && _id == $userId][0]`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    // Update user with employee fields
+    const updatedUser = await backendClient
+      .patch(userId)
+      .set({
+        isEmployee: true,
+        employeeRole: role,
+        employeeStatus: "active",
+        employeeAssignedBy: adminUser.email,
+        employeeAssignedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    if (role === "callcenter") {
+      const email =
+        typeof updatedUser.email === "string"
+          ? updatedUser.email.trim().toLowerCase()
+          : "";
+      const fallbackName =
+        `${updatedUser.firstName || ""} ${updatedUser.lastName || ""}`.trim() ||
+        updatedUser.email ||
+        "Sales";
+      const emailFilter = email ? " || lower(email) == $email" : "";
+
+      const existingContact = await backendClient.fetch<{
+        _id: string;
+        name?: string;
+        email?: string;
+        user?: { _ref?: string };
+      } | null>(
+        `*[_type == "salesContact" && (user._ref == $userId${emailFilter})][0]{
+          _id,
+          name,
+          email,
+          user
+        }`,
+        { userId: updatedUser._id, email }
+      );
+
+      if (existingContact?._id) {
+        const patch: Record<string, unknown> = {};
+        if (!existingContact.user?._ref) {
+          patch.user = { _type: "reference", _ref: updatedUser._id };
+        }
+        if (!existingContact.email && updatedUser.email) {
+          patch.email = updatedUser.email;
+        }
+        if (!existingContact.name && fallbackName) {
+          patch.name = fallbackName;
+        }
+
+        if (Object.keys(patch).length > 0) {
+          await backendClient.patch(existingContact._id).set(patch).commit();
+        }
+      } else {
+        await backendClient.create({
+          _type: "salesContact",
+          name: fallbackName,
+          email: updatedUser.email || "",
+          user: { _type: "reference", _ref: updatedUser._id },
+        });
+      }
+    }
+
+    return {
+      success: true,
+      message: `Successfully assigned ${role} role to ${user.firstName} ${user.lastName}`,
+      employee: {
+        _id: updatedUser._id,
+        userId: updatedUser._id,
+        clerkUserId: updatedUser.clerkUserId,
+        email: updatedUser.email,
+        firstName: updatedUser.firstName,
+        lastName: updatedUser.lastName,
+        role,
+        status: "active",
+        assignedBy: adminUser.email,
+        assignedAt: new Date().toISOString(),
+        permissions: ROLE_PERMISSIONS[role],
+        createdAt: updatedUser.createdAt,
+        updatedAt: updatedUser.updatedAt,
+      },
+    };
+  } catch (error) {
+    console.error("Error assigning employee role:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to assign employee role",
+    };
+  }
+}
+
+// Remove employee role from user
+export async function removeEmployeeRole(
+  userId: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    await backendClient
+      .patch(userId)
+      .set({
+        isEmployee: false,
+        employeeRole: undefined,
+        employeeStatus: "inactive",
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    return { success: true, message: "Employee role removed successfully" };
+  } catch (error) {
+    console.error("Error removing employee role:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to remove employee role",
+    };
+  }
+}
+
+// Update employee status
+export async function updateEmployeeStatus(
+  userId: string,
+  status: EmployeeStatus,
+  reason?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId }
+    );
+
+    if (!adminUser) {
+      return { success: false, message: "Admin user not found" };
+    }
+
+    const updateData: any = {
+      employeeStatus: status,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (status === "suspended") {
+      updateData.employeeSuspendedBy = adminUser.email;
+      updateData.employeeSuspendedAt = new Date().toISOString();
+      if (reason) {
+        updateData.employeeSuspensionReason = reason;
+      }
+    }
+
+    await backendClient.patch(userId).set(updateData).commit();
+
+    return { success: true, message: `Employee status updated to ${status}` };
+  } catch (error) {
+    console.error("Error updating employee status:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to update employee status",
+    };
+  }
+}
+
+// Get all employees
+export async function getAllEmployees(): Promise<Employee[]> {
+  try {
+    const employees = await backendClient.fetch(
+      `*[_type == "user" && isEmployee == true] | order(employeeAssignedAt desc) {
+        _id,
+        "userId": _id,
+        clerkUserId,
+        email,
+        firstName,
+        lastName,
+        employeeRole,
+        employeeStatus,
+        employeeAssignedBy,
+        employeeAssignedAt,
+        employeeSuspendedBy,
+        employeeSuspendedAt,
+        employeeSuspensionReason,
+        employeePerformance,
+        createdAt,
+        updatedAt
+      }`
+    );
+
+    return employees.map((emp: any) => ({
+      ...emp,
+      role: emp.employeeRole,
+      status: emp.employeeStatus,
+      assignedBy: emp.employeeAssignedBy,
+      assignedAt: emp.employeeAssignedAt,
+      suspendedBy: emp.employeeSuspendedBy,
+      suspendedAt: emp.employeeSuspendedAt,
+      suspensionReason: emp.employeeSuspensionReason,
+      permissions: ROLE_PERMISSIONS[emp.employeeRole as EmployeeRole],
+      performance: emp.employeePerformance,
+    }));
+  } catch (error) {
+    console.error("Error fetching employees:", error);
+    return [];
+  }
+}
+
+// Get employees by role
+export async function getEmployeesByRole(
+  role: EmployeeRole
+): Promise<Employee[]> {
+  try {
+    const employees = await backendClient.fetch(
+      `*[_type == "user" && isEmployee == true && employeeRole == $role && employeeStatus == "active"] | order(firstName asc) {
+        _id,
+        "userId": _id,
+        clerkUserId,
+        email,
+        firstName,
+        lastName,
+        employeeRole,
+        employeeStatus,
+        employeeAssignedBy,
+        employeeAssignedAt,
+        employeePerformance,
+        createdAt,
+        updatedAt
+      }`,
+      { role }
+    );
+
+    return employees.map((emp: any) => ({
+      ...emp,
+      role: emp.employeeRole,
+      status: emp.employeeStatus,
+      assignedBy: emp.employeeAssignedBy,
+      assignedAt: emp.employeeAssignedAt,
+      permissions: ROLE_PERMISSIONS[emp.employeeRole as EmployeeRole],
+      performance: emp.employeePerformance,
+    }));
+  } catch (error) {
+    console.error("Error fetching employees by role:", error);
+    return [];
+  }
+}
+
+// Get current employee info
+export async function getCurrentEmployee(): Promise<Employee | null> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return null;
+    }
+
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true][0] {
+        _id,
+        "userId": _id,
+        clerkUserId,
+        email,
+        firstName,
+        lastName,
+        employeeRole,
+        employeeStatus,
+        employeeAssignedBy,
+        employeeAssignedAt,
+        employeePerformance,
+        createdAt,
+        updatedAt
+      }`,
+      { clerkUserId }
+    );
+
+    if (!user || !user.employeeRole) {
+      return null;
+    }
+
+    return {
+      ...user,
+      role: user.employeeRole,
+      status: user.employeeStatus,
+      assignedBy: user.employeeAssignedBy,
+      assignedAt: user.employeeAssignedAt,
+      permissions: ROLE_PERMISSIONS[user.employeeRole as EmployeeRole],
+      performance: user.employeePerformance,
+    };
+  } catch (error) {
+    console.error("Error fetching current employee:", error);
+    return null;
+  }
+}
+
+// Get all users (potential employees)
+export async function getAllUsers() {
+  try {
+    const users = await backendClient.fetch(
+      `*[_type == "user"] | order(createdAt desc) {
+        _id,
+        clerkUserId,
+        email,
+        firstName,
+        lastName,
+        isEmployee,
+        employeeRole,
+        employeeStatus,
+        isActive,
+        createdAt
+      }`
+    );
+
+    return users;
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    return [];
+  }
+}
+
+// Update employee performance
+export async function updateEmployeePerformance(
+  userId: string,
+  performanceData: Partial<{
+    ordersProcessed: number;
+    ordersConfirmed: number;
+    ordersPacked: number;
+    ordersAssignedForDelivery: number;
+    ordersDelivered: number;
+    cashCollected: number;
+    paymentsReceived: number;
+  }>
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const user = await backendClient.fetch(
+      `*[_type == "user" && _id == $userId][0] { employeePerformance }`,
+      { userId }
+    );
+
+    const currentPerformance = user?.employeePerformance || {};
+
+    await backendClient
+      .patch(userId)
+      .set({
+        employeePerformance: {
+          ...currentPerformance,
+          ...performanceData,
+          lastActiveAt: new Date().toISOString(),
+        },
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    return { success: true, message: "Performance updated successfully" };
+  } catch (error) {
+    console.error("Error updating employee performance:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to update performance",
+    };
+  }
+}
+
+
+================================================================================
+FILE: actions/employeeSalesContactActions.ts
+
+"use server";
+
+import { auth } from "@clerk/nextjs/server";
+import { backendClient } from "@/sanity/lib/backendClient";
+
+export type EmployeeSalesContact = {
+  _id: string;
+  name?: string;
+  phone?: string;
+  ext?: string;
+  fax?: string;
+  mobile?: string;
+  lineId?: string;
+  lineExt?: string;
+  email?: string;
+  web?: string;
+};
+
+type EmployeeRecord = {
+  _id: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  employeeRole?: string;
+};
+
+type SalesContactRecord = EmployeeSalesContact & {
+  user?: { _ref?: string };
+};
+
+type SalesContactPayload = Omit<EmployeeSalesContact, "_id">;
+
+const normalizeString = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
+
+const buildEmployeeName = (employee: EmployeeRecord) =>
+  [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim();
+
+const getEmployeeByClerkUserId = async (clerkUserId: string) =>
+  backendClient.fetch<EmployeeRecord | null>(
+    `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true][0]{
+      _id,
+      email,
+      firstName,
+      lastName,
+      employeeRole
+    }`,
+    { clerkUserId }
+  );
+
+const ensureSalesContactForEmployee = async (
+  employee: EmployeeRecord
+): Promise<SalesContactRecord | null> => {
+  if (employee.employeeRole !== "callcenter") {
+    return null;
+  }
+
+  const email = normalizeString(employee.email).toLowerCase();
+  const emailFilter = email ? " || lower(email) == $email" : "";
+  const contact = await backendClient.fetch<SalesContactRecord | null>(
+    `*[_type == "salesContact" && (user._ref == $userId${emailFilter})][0]{
+      _id,
+      name,
+      phone,
+      ext,
+      fax,
+      mobile,
+      lineId,
+      lineExt,
+      email,
+      web,
+      user
+    }`,
+    { userId: employee._id, email }
+  );
+
+  const fallbackName = buildEmployeeName(employee) || employee.email || "Sales";
+
+  if (contact) {
+    const patch: Record<string, unknown> = {};
+    if (!contact.user?._ref) {
+      patch.user = { _type: "reference", _ref: employee._id };
+    }
+    if (!contact.email && employee.email) {
+      patch.email = employee.email;
+    }
+    if (!contact.name && fallbackName) {
+      patch.name = fallbackName;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      const updated = await backendClient
+        .patch(contact._id)
+        .set(patch)
+        .commit();
+      return {
+        _id: updated._id,
+        name: updated.name,
+        phone: updated.phone,
+        ext: updated.ext,
+        fax: updated.fax,
+        mobile: updated.mobile,
+        lineId: updated.lineId,
+        lineExt: updated.lineExt,
+        email: updated.email,
+        web: updated.web,
+        user: updated.user,
+      } as SalesContactRecord;
+    }
+
+    return contact;
+  }
+
+  const created = await backendClient.create({
+    _type: "salesContact",
+    name: fallbackName,
+    email: employee.email || "",
+    user: { _type: "reference", _ref: employee._id },
+  });
+
+  return {
+    _id: created._id,
+    name: created.name,
+    email: created.email,
+    user: created.user,
+  } as SalesContactRecord;
+};
+
+export async function getEmployeeSalesContact(): Promise<
+  EmployeeSalesContact | null
+> {
+  const { userId: clerkUserId } = await auth();
+
+  if (!clerkUserId) {
+    return null;
+  }
+
+  const employee = await getEmployeeByClerkUserId(clerkUserId);
+  if (!employee || employee.employeeRole !== "callcenter") {
+    return null;
+  }
+
+  const contact = await ensureSalesContactForEmployee(employee);
+  return contact ?? null;
+}
+
+export async function updateEmployeeSalesContact(
+  payload: SalesContactPayload
+): Promise<{ success: boolean; message: string; contact?: EmployeeSalesContact }>
+{
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await getEmployeeByClerkUserId(clerkUserId);
+    if (!employee || employee.employeeRole !== "callcenter") {
+      return {
+        success: false,
+        message: "Only sales employees can update sales contact details",
+      };
+    }
+
+    const contact = await ensureSalesContactForEmployee(employee);
+    if (!contact?._id) {
+      return { success: false, message: "Sales contact not found" };
+    }
+
+    const fallbackName = buildEmployeeName(employee) || employee.email || "Sales";
+
+    const updatePayload: Record<string, unknown> = {
+      user: { _type: "reference", _ref: employee._id },
+      name: normalizeString(payload.name) || fallbackName,
+      phone: normalizeString(payload.phone),
+      ext: normalizeString(payload.ext),
+      fax: normalizeString(payload.fax),
+      mobile: normalizeString(payload.mobile),
+      lineId: normalizeString(payload.lineId),
+      lineExt: normalizeString(payload.lineExt),
+      email: normalizeString(payload.email) || employee.email || "",
+      web: normalizeString(payload.web),
+    };
+
+    const updated = await backendClient
+      .patch(contact._id)
+      .set(updatePayload)
+      .commit();
+
+    return {
+      success: true,
+      message: "Sales contact updated successfully",
+      contact: {
+        _id: updated._id,
+        name: updated.name,
+        phone: updated.phone,
+        ext: updated.ext,
+        fax: updated.fax,
+        mobile: updated.mobile,
+        lineId: updated.lineId,
+        lineExt: updated.lineExt,
+        email: updated.email,
+        web: updated.web,
+      },
+    };
+  } catch (error) {
+    console.error("Error updating sales contact:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to update sales contact",
+    };
+  }
+}
+
+
+================================================================================
+FILE: actions/orderCancellationActions.ts
+
+"use server";
+
+import { auth } from "@clerk/nextjs/server";
+import { backendClient } from "@/sanity/lib/backendClient";
+import { writeClient } from "@/sanity/lib/client";
+import { addWalletCredit } from "./walletActions";
+import { sendOrderStatusNotification } from "@/lib/notificationService";
+import { revalidatePath } from "next/cache";
+import { isAdmin } from "@/lib/adminUtils";
+
+/**
+ * Admin: Approve cancellation request and cancel order with refund
+ */
+export async function approveCancellationRequest(
+  orderId: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Verify admin status - check both database field and environment variable
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ email, isAdmin }`,
+      { clerkUserId }
+    );
+
+    if (!isAdmin(adminUser)) {
+      return {
+        success: false,
+        message: "Admin access required to approve cancellation requests",
+      };
+    }
+
+    // Fetch order details
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]{
+        _id,
+        orderNumber,
+        status,
+        paymentStatus,
+        totalPrice,
+        amountPaid,
+        clerkUserId,
+        cancellationRequested,
+        cancellationRequestReason
+      }`,
+      { orderId }
+    );
+
+    if (!order) {
+      return { success: false, message: "Order not found" };
+    }
+
+    if (!order.cancellationRequested) {
+      return {
+        success: false,
+        message: "No cancellation request found for this order",
+      };
+    }
+
+    if (order.status === "cancelled") {
+      return { success: false, message: "Order is already cancelled" };
+    }
+
+    // Determine refund amount
+    let refundAmount = 0;
+    let shouldRefund = false;
+
+    if (order.paymentStatus === "paid") {
+      refundAmount = order.amountPaid || order.totalPrice || 0;
+      shouldRefund = refundAmount > 0;
+    }
+
+    // Add refund to wallet if payment was made
+    let walletRefunded = false;
+    if (shouldRefund && refundAmount > 0) {
+      const refundResult = await addWalletCredit(
+        order.clerkUserId,
+        refundAmount,
+        `Refund for cancelled order #${order.orderNumber}`,
+        orderId,
+        adminUser.email
+      );
+
+      if (refundResult.success) {
+        walletRefunded = true;
+      } else {
+        console.error("Failed to add refund to wallet:", refundResult.message);
+      }
+    }
+
+    // Update order status to cancelled
+    await backendClient
+      .patch(orderId)
+      .set({
+        status: "cancelled",
+        paymentStatus: walletRefunded ? "refunded" : "cancelled",
+        cancelledAt: new Date().toISOString(),
+        cancelledBy: adminUser.email,
+        cancellationReason: order.cancellationRequestReason,
+        refundedToWallet: walletRefunded,
+        refundAmount: walletRefunded ? refundAmount : 0,
+        cancellationRequested: false,
+      })
+      .commit();
+
+    // Send notification to customer
+    try {
+      await sendOrderStatusNotification({
+        clerkUserId: order.clerkUserId,
+        orderNumber: order.orderNumber,
+        orderId: order._id,
+        status: "cancelled",
+      });
+    } catch (notificationError) {
+      console.error(
+        "Failed to send cancellation notification:",
+        notificationError
+      );
+    }
+
+    revalidatePath("/admin/orders");
+    revalidatePath("/user/orders");
+
+    const message = shouldRefund
+      ? `Cancellation approved. $${refundAmount.toFixed(
+          2
+        )} has been credited to the customer's wallet.`
+      : "Cancellation approved successfully.";
+
+    return { success: true, message };
+  } catch (error) {
+    console.error("Error approving cancellation request:", error);
+    return {
+      success: false,
+      message: "Failed to approve cancellation request",
+    };
+  }
+}
+
+/**
+ * Admin: Reject cancellation request and proceed with order confirmation
+ */
+export async function rejectCancellationRequest(
+  orderId: string,
+  rejectionReason?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Verify admin status - check both database field and environment variable
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ email, isAdmin }`,
+      { clerkUserId }
+    );
+
+    if (!isAdmin(adminUser)) {
+      return {
+        success: false,
+        message: "Admin access required to reject cancellation requests",
+      };
+    }
+
+    // Fetch order details
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]{
+        _id,
+        orderNumber,
+        status,
+        cancellationRequested,
+        clerkUserId
+      }`,
+      { orderId }
+    );
+
+    if (!order) {
+      return { success: false, message: "Order not found" };
+    }
+
+    if (!order.cancellationRequested) {
+      return {
+        success: false,
+        message: "No cancellation request found for this order",
+      };
+    }
+
+    // Update order - clear cancellation request and confirm the order
+    await backendClient
+      .patch(orderId)
+      .set({
+        cancellationRequested: false,
+        cancellationRequestedAt: null,
+        cancellationRequestReason: null,
+        status: "confirmed",
+        orderConfirmedBy: adminUser.email,
+        orderConfirmedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    // Send notification to customer
+    try {
+      await sendOrderStatusNotification({
+        clerkUserId: order.clerkUserId,
+        orderNumber: order.orderNumber,
+        orderId: order._id,
+        status: "confirmed",
+        previousStatus: order.status,
+      });
+    } catch (notificationError) {
+      console.error(
+        "Failed to send confirmation notification:",
+        notificationError
+      );
+    }
+
+    revalidatePath("/admin/orders");
+    revalidatePath("/user/orders");
+
+    return {
+      success: true,
+      message: rejectionReason
+        ? `Cancellation request rejected: ${rejectionReason}. Order confirmed.`
+        : "Cancellation request rejected. Order confirmed and will be processed.",
+    };
+  } catch (error) {
+    console.error("Error rejecting cancellation request:", error);
+    return { success: false, message: "Failed to reject cancellation request" };
+  }
+}
+
+/**
+ * Admin: Cancel order and refund to wallet if paid
+ */
+export async function cancelOrder(
+  orderId: string,
+  reason: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Verify admin status - check both database field and environment variable
+    const adminUser = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ email, isAdmin }`,
+      { clerkUserId }
+    );
+
+    if (!isAdmin(adminUser)) {
+      return {
+        success: false,
+        message: "Admin access required to cancel orders",
+      };
+    }
+
+    // Fetch order details
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]{
+        _id,
+        orderNumber,
+        status,
+        paymentStatus,
+        totalPrice,
+        amountPaid,
+        paymentMethod,
+        clerkUserId
+      }`,
+      { orderId }
+    );
+
+    if (!order) {
+      return { success: false, message: "Order not found" };
+    }
+
+    if (order.status === "cancelled") {
+      return { success: false, message: "Order is already cancelled" };
+    }
+
+    if (order.status === "delivered") {
+      return {
+        success: false,
+        message:
+          "Cannot cancel delivered orders. Please process a return instead.",
+      };
+    }
+
+    // Determine refund amount
+    let refundAmount = 0;
+    let shouldRefund = false;
+
+    // For paid orders, use amountPaid if available, otherwise use totalPrice
+    if (order.paymentStatus === "paid") {
+      refundAmount = order.amountPaid || order.totalPrice || 0;
+      shouldRefund = refundAmount > 0;
+    }
+
+    // Add refund to wallet if payment was made
+    let walletRefunded = false;
+    if (shouldRefund && refundAmount > 0) {
+      const refundResult = await addWalletCredit(
+        order.clerkUserId,
+        refundAmount,
+        `Refund for cancelled order #${order.orderNumber}`,
+        orderId,
+        adminUser.email
+      );
+
+      if (refundResult.success) {
+        walletRefunded = true;
+      } else {
+        console.error("Failed to add refund to wallet:", refundResult.message);
+      }
+    }
+
+    // Update order status
+    await backendClient
+      .patch(orderId)
+      .set({
+        status: "cancelled",
+        paymentStatus: "cancelled",
+        cancelledAt: new Date().toISOString(),
+        cancelledBy: adminUser.email,
+        cancellationReason: reason,
+        refundedToWallet: walletRefunded,
+        refundAmount: walletRefunded ? refundAmount : 0,
+      })
+      .commit();
+
+    // Send notification to customer
+    try {
+      await sendOrderStatusNotification({
+        clerkUserId: order.clerkUserId,
+        orderNumber: order.orderNumber,
+        orderId: order._id,
+        status: "cancelled",
+      });
+    } catch (notificationError) {
+      console.error(
+        "Failed to send cancellation notification:",
+        notificationError
+      );
+    }
+
+    const message = shouldRefund
+      ? `Order cancelled successfully. $${refundAmount.toFixed(
+          2
+        )} has been credited to the customer's wallet.`
+      : "Order cancelled successfully.";
+
+    return {
+      success: true,
+      message,
+    };
+  } catch (error) {
+    console.error("Error cancelling order:", error);
+    return {
+      success: false,
+      message: "Failed to cancel order",
+    };
+  }
+}
+
+/**
+ * User: Request order cancellation (before shipping)
+ * Sets cancellationRequested flag for admin approval
+ */
+export async function requestOrderCancellation(
+  orderId: string,
+  reason: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Get order details
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId && clerkUserId == $clerkUserId][0]{
+        _id,
+        orderNumber,
+        status,
+        paymentStatus,
+        totalPrice,
+        amountPaid,
+        paymentMethod,
+        cancellationRequested
+      }`,
+      { orderId, clerkUserId }
+    );
+
+    if (!order) {
+      return { success: false, message: "Order not found" };
+    }
+
+    const normalizedReason = typeof reason === "string" ? reason.trim() : "";
+    const finalReason = normalizedReason || "Cancelled by customer";
+
+    // Check if order can be cancelled
+    if (order.status === "cancelled") {
+      return { success: false, message: "Order is already cancelled" };
+    }
+
+    if (order.cancellationRequested) {
+      return {
+        success: false,
+        message: "Cancellation request already pending admin approval",
+      };
+    }
+
+    if (order.status === "delivered") {
+      return {
+        success: false,
+        message:
+          "Cannot cancel delivered orders. Please contact support for returns.",
+      };
+    }
+
+    if (order.status === "shipped" || order.status === "out_for_delivery") {
+      return {
+        success: false,
+        message:
+          "Order is already shipped. Please contact support to process cancellation.",
+      };
+    }
+
+    const cancellableStatuses = ["pending", "address_confirmed"];
+    if (!cancellableStatuses.includes(order.status)) {
+      return {
+        success: false,
+        message: "Order is already being processed and cannot be cancelled.",
+      };
+    }
+
+    // For pending orders, set cancellation request flag for admin approval
+    await writeClient
+      .patch(orderId)
+      .set({
+        cancellationRequested: true,
+        cancellationRequestedAt: new Date().toISOString(),
+        cancellationRequestReason: finalReason,
+      })
+      .commit();
+
+    return {
+      success: true,
+      message:
+        "Cancellation request submitted. Our team will review and process your request shortly.",
+    };
+  } catch (error) {
+    console.error("Error requesting order cancellation:", error);
+    return {
+      success: false,
+      message: "Failed to submit cancellation request",
+    };
+  }
+}
+
+
+================================================================================
+FILE: actions/orderEmployeeActions.ts
+
+"use server";
+
+import { auth } from "@clerk/nextjs/server";
+import { backendClient } from "@/sanity/lib/backendClient";
+import { EmployeeRole } from "@/types/employee";
+import { updateEmployeePerformance } from "./employeeActions";
+import { sendOrderStatusNotification } from "@/lib/notificationService";
+import { invalidateOrder } from "@/lib/cache";
+import type { Address } from "@/lib/address";
+import { ensureCustomerCodeForUser } from "@/lib/customerCode";
+
+// Add status history entry
+async function addStatusHistory(
+  orderId: string,
+  status: string,
+  employeeEmail: string,
+  role: EmployeeRole | "admin" | "system",
+  notes?: string
+) {
+  const order = await backendClient.fetch(
+    `*[_type == "order" && _id == $orderId][0] { statusHistory }`,
+    { orderId }
+  );
+
+  const statusHistory = order?.statusHistory || [];
+
+  statusHistory.push({
+    status,
+    changedBy: employeeEmail,
+    changedByRole: role,
+    changedAt: new Date().toISOString(),
+    notes,
+  });
+
+  await backendClient.patch(orderId).set({ statusHistory }).commit();
+}
+
+type EmployeeRecord = {
+  _id: string;
+  clerkUserId: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  employeeRole?: EmployeeRole;
+  employeePerformance?: Record<string, number>;
+};
+
+type SalesContactRecord = {
+  _id: string;
+  name?: string;
+  email?: string;
+  user?: { _ref?: string };
+};
+
+const normalizeEmail = (value?: string | null) =>
+  typeof value === "string" ? value.trim().toLowerCase() : "";
+
+const normalizeString = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
+
+const buildEmployeeName = (employee: EmployeeRecord) =>
+  [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim();
+
+const getEmployeeByClerkUserId = async (clerkUserId: string) =>
+  backendClient.fetch<EmployeeRecord | null>(
+    `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true][0]{
+      _id,
+      clerkUserId,
+      email,
+      firstName,
+      lastName,
+      employeeRole,
+      employeePerformance
+    }`,
+    { clerkUserId }
+  );
+
+const ensureSalesContactForEmployee = async (
+  employee: EmployeeRecord
+): Promise<SalesContactRecord | null> => {
+  if (employee.employeeRole !== "callcenter") {
+    return null;
+  }
+
+  const email = normalizeEmail(employee.email);
+  const emailFilter = email ? " || lower(email) == $email" : "";
+  const contact = await backendClient.fetch<SalesContactRecord | null>(
+    `*[_type == "salesContact" && (user._ref == $userId${emailFilter})][0]{
+      _id,
+      name,
+      email,
+      user
+    }`,
+    { userId: employee._id, email }
+  );
+
+  const fallbackName = buildEmployeeName(employee) || employee.email || "Sales";
+
+  if (contact) {
+    const patch: Record<string, unknown> = {};
+    if (!contact.user?._ref) {
+      patch.user = { _type: "reference", _ref: employee._id };
+    }
+    if (!contact.email && employee.email) {
+      patch.email = employee.email;
+    }
+    if (!contact.name && fallbackName) {
+      patch.name = fallbackName;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      const updated = await backendClient
+        .patch(contact._id)
+        .set(patch)
+        .commit();
+      return {
+        _id: updated._id,
+        name: updated.name,
+        email: updated.email,
+        user: updated.user,
+      } as SalesContactRecord;
+    }
+
+    return contact;
+  }
+
+  const created = await backendClient.create({
+    _type: "salesContact",
+    name: fallbackName,
+    email: employee.email || "",
+    user: { _type: "reference", _ref: employee._id },
+  });
+
+  return {
+    _id: created._id,
+    name: created.name,
+    email: created.email,
+    user: created.user,
+  } as SalesContactRecord;
+};
+
+const hasSalesOrderAccess = (
+  order: {
+    salesContact?: { _ref?: string } | null;
+    quotationDetails?: { salesContact?: { _ref?: string } | null } | null;
+  },
+  employeeRole: EmployeeRole | undefined,
+  salesContactId?: string | null
+) => {
+  if (employeeRole === "incharge") {
+    return true;
+  }
+  if (employeeRole !== "callcenter") {
+    return false;
+  }
+
+  const orderSalesContactId = order.salesContact?._ref;
+  const quotationSalesContactId = order.quotationDetails?.salesContact?._ref;
+
+  if (!orderSalesContactId && !quotationSalesContactId) {
+    return true;
+  }
+
+  if (!salesContactId) {
+    return false;
+  }
+
+  return (
+    orderSalesContactId === salesContactId ||
+    quotationSalesContactId === salesContactId
+  );
+};
+
+// Sales: Confirm address
+export async function confirmAddress(
+  orderId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await getEmployeeByClerkUserId(clerkUserId);
+
+    if (
+      !employee ||
+      !["callcenter", "incharge"].includes(employee.employeeRole ?? "")
+    ) {
+      return {
+        success: false,
+        message: "Only sales employees can confirm addresses",
+      };
+    }
+
+    const salesContact = await ensureSalesContactForEmployee(employee);
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]{
+        _id,
+        salesContact,
+        quotationDetails{ salesContact }
+      }`,
+      { orderId }
+    );
+
+    if (!order?._id) {
+      return { success: false, message: "Order not found" };
+    }
+
+    if (
+      !hasSalesOrderAccess(order, employee.employeeRole, salesContact?._id)
+    ) {
+      return {
+        success: false,
+        message: "This order is assigned to another sales contact",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        addressConfirmedBy: employee.email,
+        addressConfirmedAt: new Date().toISOString(),
+        status: "address_confirmed",
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Address Confirmed",
+      employee.email,
+      employee.employeeRole ?? "callcenter",
+      notes
+    );
+
+    return { success: true, message: "Address confirmed successfully" };
+  } catch (error) {
+    console.error("Error confirming address:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to confirm address",
+    };
+  }
+}
+
+// Sales: Update shipping address (before confirmation)
+export async function updateShippingAddress(
+  orderId: string,
+  shippingAddress: {
+    fullName: string;
+    address: string;
+    city: string;
+    state: string;
+    postalCode: string;
+    country: string;
+    phone?: string;
+  }
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await getEmployeeByClerkUserId(clerkUserId);
+
+    if (
+      !employee ||
+      !["callcenter", "incharge"].includes(employee.employeeRole ?? "")
+    ) {
+      return {
+        success: false,
+        message: "Only sales employees can update shipping address",
+      };
+    }
+
+    const salesContact = await ensureSalesContactForEmployee(employee);
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]{
+        _id,
+        addressConfirmedBy,
+        salesContact,
+        quotationDetails{ salesContact }
+      }`,
+      { orderId }
+    );
+
+    if (!order?._id) {
+      return { success: false, message: "Order not found" };
+    }
+
+    if (
+      !hasSalesOrderAccess(order, employee.employeeRole, salesContact?._id)
+    ) {
+      return {
+        success: false,
+        message: "This order is assigned to another sales contact",
+      };
+    }
+
+    if (order?.addressConfirmedBy) {
+      return {
+        success: false,
+        message: "Cannot update address after it has been confirmed",
+      };
+    }
+
+    await backendClient.patch(orderId).set({ shippingAddress }).commit();
+
+    await addStatusHistory(
+      orderId,
+      "Shipping Address Updated",
+      employee.email,
+      employee.employeeRole ?? "callcenter",
+      "Address details were corrected/updated"
+    );
+
+    return { success: true, message: "Shipping address updated successfully" };
+  } catch (error) {
+    console.error("Error updating shipping address:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to update shipping address",
+    };
+  }
+}
+
+// Sales: Confirm order
+export async function confirmOrder(
+  orderId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await getEmployeeByClerkUserId(clerkUserId);
+
+    if (
+      !employee ||
+      !["callcenter", "incharge"].includes(employee.employeeRole ?? "")
+    ) {
+      return {
+        success: false,
+        message: "Only sales employees can confirm orders",
+      };
+    }
+
+    const salesContact = await ensureSalesContactForEmployee(employee);
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]{
+        _id,
+        orderNumber,
+        clerkUserId,
+        addressConfirmedBy,
+        salesContact,
+        quotationDetails{ salesContact }
+      }`,
+      { orderId }
+    );
+
+    if (!order?._id) {
+      return { success: false, message: "Order not found" };
+    }
+
+    if (
+      !hasSalesOrderAccess(order, employee.employeeRole, salesContact?._id)
+    ) {
+      return {
+        success: false,
+        message: "This order is assigned to another sales contact",
+      };
+    }
+
+    if (!order.addressConfirmedBy) {
+      return { success: false, message: "Please confirm the address first" };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        orderConfirmedBy: employee.email,
+        orderConfirmedAt: new Date().toISOString(),
+        status: "order_confirmed",
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Order Confirmed",
+      employee.email,
+      employee.employeeRole,
+      notes
+    );
+
+    // Send notification to customer
+    try {
+      await sendOrderStatusNotification({
+        clerkUserId: order.clerkUserId,
+        orderNumber: order.orderNumber,
+        orderId: order._id,
+        status: "order_confirmed",
+      });
+    } catch (notificationError) {
+      console.error(
+        "Failed to send order confirmation notification:",
+        notificationError
+      );
+    }
+
+    // Update employee performance
+    const currentPerformance = employee.employeePerformance || {};
+    await updateEmployeePerformance(employee._id, {
+      ordersProcessed: (currentPerformance.ordersProcessed || 0) + 1,
+      ordersConfirmed: (currentPerformance.ordersConfirmed || 0) + 1,
+    });
+
+    return { success: true, message: "Order confirmed successfully" };
+  } catch (error) {
+    console.error("Error confirming order:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to confirm order",
+    };
+  }
+}
+
+// Sales: Update quotation details
+export async function updateQuotationDetails(
+  orderId: string,
+  quotationDetails: Partial<Address>
+): Promise<{
+  success: boolean;
+  message: string;
+  quotationDetails?: Record<string, unknown>;
+}> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await getEmployeeByClerkUserId(clerkUserId);
+
+    if (
+      !employee ||
+      !["callcenter", "incharge"].includes(employee.employeeRole ?? "")
+    ) {
+      return {
+        success: false,
+        message: "Only sales employees can update quotation details",
+      };
+    }
+
+    if (!quotationDetails || typeof quotationDetails !== "object") {
+      return {
+        success: false,
+        message: "Quotation details are required",
+      };
+    }
+
+    const salesContact = await ensureSalesContactForEmployee(employee);
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]{
+        _id,
+        status,
+        clerkUserId,
+        email,
+        address{
+          name,
+          email,
+          contactEmail,
+          lineId,
+          phone,
+          fax,
+          company,
+          customerCode,
+          winCode,
+          taxId,
+          branch,
+          address,
+          city,
+          state,
+          zip,
+          country,
+          countryCode,
+          stateCode,
+          subArea,
+          type
+        },
+        quotationDetails{
+          salesContact,
+          name,
+          email,
+          contactEmail,
+          lineId,
+          phone,
+          fax,
+          company,
+          customerCode,
+          winCode,
+          taxId,
+          branch,
+          address,
+          city,
+          state,
+          zip,
+          country,
+          countryCode,
+          stateCode,
+          subArea,
+          type
+        },
+        salesContact
+      }`,
+      { orderId }
+    );
+
+    if (!order?._id) {
+      return { success: false, message: "Order not found" };
+    }
+
+    if (
+      !hasSalesOrderAccess(order, employee.employeeRole, salesContact?._id)
+    ) {
+      return {
+        success: false,
+        message: "This order is assigned to another sales contact",
+      };
+    }
+
+    let ensuredCustomerCode = "";
+    try {
+      const ensured = await ensureCustomerCodeForUser({
+        clerkUserId: order.clerkUserId,
+        email: order.email,
+      });
+      ensuredCustomerCode = ensured.customerCode;
+    } catch (error) {
+      console.error("Failed to ensure customer code:", error);
+    }
+
+    const currentDetails = order.quotationDetails || order.address || {};
+    const fallbackEmail = normalizeString(order.email);
+
+    const nextQuotationDetails: Record<string, unknown> = {
+      name:
+        normalizeString(quotationDetails.name) ||
+        normalizeString(currentDetails.name),
+      email:
+        normalizeString(quotationDetails.email) ||
+        normalizeString(currentDetails.email) ||
+        fallbackEmail,
+      contactEmail:
+        normalizeString(quotationDetails.contactEmail) ||
+        normalizeString(quotationDetails.email) ||
+        normalizeString(currentDetails.contactEmail) ||
+        normalizeString(currentDetails.email) ||
+        fallbackEmail,
+      lineId:
+        normalizeString(quotationDetails.lineId) ||
+        normalizeString(currentDetails.lineId),
+      phone:
+        normalizeString(quotationDetails.phone) ||
+        normalizeString(currentDetails.phone),
+      fax:
+        normalizeString(quotationDetails.fax) ||
+        normalizeString(currentDetails.fax),
+      company:
+        normalizeString(quotationDetails.company) ||
+        normalizeString(currentDetails.company),
+      customerCode:
+        ensuredCustomerCode ||
+        normalizeString(currentDetails.customerCode),
+      winCode:
+        normalizeString(quotationDetails.winCode) ||
+        normalizeString(currentDetails.winCode),
+      taxId:
+        normalizeString(quotationDetails.taxId) ||
+        normalizeString(currentDetails.taxId),
+      branch:
+        normalizeString(quotationDetails.branch) ||
+        normalizeString(currentDetails.branch),
+      address:
+        normalizeString(quotationDetails.address) ||
+        normalizeString(currentDetails.address),
+      city:
+        normalizeString(quotationDetails.city) ||
+        normalizeString(currentDetails.city),
+      state:
+        normalizeString(quotationDetails.state) ||
+        normalizeString(currentDetails.state),
+      zip:
+        normalizeString(quotationDetails.zip) ||
+        normalizeString(currentDetails.zip),
+      country:
+        normalizeString(quotationDetails.country) ||
+        normalizeString(currentDetails.country),
+      countryCode:
+        normalizeString(quotationDetails.countryCode) ||
+        normalizeString(currentDetails.countryCode),
+      stateCode:
+        normalizeString(quotationDetails.stateCode) ||
+        normalizeString(currentDetails.stateCode),
+      subArea:
+        normalizeString(quotationDetails.subArea) ||
+        normalizeString(currentDetails.subArea),
+      type:
+        normalizeString(quotationDetails.type) ||
+        normalizeString(currentDetails.type) ||
+        "home",
+    };
+
+    const requiredFields = ["name", "address", "city", "state", "zip", "country"];
+    const missingFields = requiredFields.filter(
+      (field) => !nextQuotationDetails[field]
+    );
+
+    if (missingFields.length > 0) {
+      return {
+        success: false,
+        message: "Missing required quotation details",
+      };
+    }
+
+    const existingSalesContact = order.quotationDetails?.salesContact;
+    const quotationDetailsPatch = existingSalesContact
+      ? { ...nextQuotationDetails, salesContact: existingSalesContact }
+      : nextQuotationDetails;
+
+    const updatedOrder = await backendClient
+      .patch(orderId)
+      .set({ quotationDetails: quotationDetailsPatch })
+      .commit();
+
+    try {
+      const quotationId = await backendClient.fetch<string | null>(
+        `*[_type == "quotation" && order._ref == $orderId] | order(version desc, createdAt desc)[0]._id`,
+        { orderId }
+      );
+
+      if (quotationId && updatedOrder?.quotationDetails) {
+        const quotationDetailsPayload = {
+          ...(updatedOrder.quotationDetails as Record<string, unknown>),
+        };
+        delete quotationDetailsPayload.salesContact;
+
+        await backendClient
+          .patch(quotationId)
+          .set({ quotationDetails: quotationDetailsPayload })
+          .commit();
+      }
+    } catch (error) {
+      console.error("Error updating quotation details snapshot:", error);
+    }
+
+    if (order.clerkUserId) {
+      await invalidateOrder(orderId, order.clerkUserId);
+    }
+
+    return {
+      success: true,
+      message: "Quotation details updated successfully",
+      quotationDetails: updatedOrder.quotationDetails,
+    };
+  } catch (error) {
+    console.error("Error updating quotation details:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to update quotation details",
+    };
+  }
+}
+
+// Sales: Confirm selected quotation
+export async function confirmQuotationSelection(
+  orderId: string,
+  quotationId: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await getEmployeeByClerkUserId(clerkUserId);
+
+    if (
+      !employee ||
+      !["callcenter", "incharge"].includes(employee.employeeRole ?? "")
+    ) {
+      return {
+        success: false,
+        message: "Only sales employees can confirm quotations",
+      };
+    }
+
+    if (!quotationId) {
+      return { success: false, message: "Quotation ID is required" };
+    }
+
+    const salesContact = await ensureSalesContactForEmployee(employee);
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]{
+        _id,
+        clerkUserId,
+        salesContact,
+        quotationDetails{ salesContact }
+      }`,
+      { orderId }
+    );
+
+    if (!order?._id) {
+      return { success: false, message: "Order not found" };
+    }
+
+    if (
+      !hasSalesOrderAccess(order, employee.employeeRole, salesContact?._id)
+    ) {
+      return {
+        success: false,
+        message: "This order is assigned to another sales contact",
+      };
+    }
+
+    const quotation = await backendClient.fetch<{ _id: string } | null>(
+      `*[_type == "quotation" && _id == $quotationId && order._ref == $orderId][0]{
+        _id
+      }`,
+      { quotationId, orderId }
+    );
+
+    if (!quotation?._id) {
+      return {
+        success: false,
+        message: "Quotation not found for this order",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        selectedQuotation: { _type: "reference", _ref: quotation._id },
+        selectedQuotationAt: new Date().toISOString(),
+      })
+      .commit();
+
+    if (order.clerkUserId) {
+      await invalidateOrder(orderId, order.clerkUserId);
+    }
+
+    return {
+      success: true,
+      message: "Confirmed quotation updated successfully",
+    };
+  } catch (error) {
+    console.error("Error confirming quotation selection:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to confirm quotation selection",
+    };
+  }
+}
+
+// Packer: Mark order as packed
+export async function markAsPacked(
+  orderId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "packer" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only packers can mark orders as packed",
+      };
+    }
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    if (!order.orderConfirmedBy) {
+      return {
+        success: false,
+        message: "Order must be confirmed before packing",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        packedBy: employee.email,
+        packedAt: new Date().toISOString(),
+        packingNotes: notes,
+        status: "packed",
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Packed",
+      employee.email,
+      employee.employeeRole,
+      notes
+    );
+
+    // Send notification to customer
+    try {
+      await sendOrderStatusNotification({
+        clerkUserId: order.clerkUserId,
+        orderNumber: order.orderNumber,
+        orderId: order._id,
+        status: "packed",
+      });
+    } catch (notificationError) {
+      console.error("Failed to send packed notification:", notificationError);
+    }
+
+    // Update employee performance
+    const currentPerformance = employee.employeePerformance || {};
+    await updateEmployeePerformance(employee._id, {
+      ordersProcessed: (currentPerformance.ordersProcessed || 0) + 1,
+      ordersPacked: (currentPerformance.ordersPacked || 0) + 1,
+    });
+
+    // Invalidate caches for instant updates
+    await invalidateOrder(orderId, order.clerkUserId);
+
+    return { success: true, message: "Order marked as packed successfully" };
+  } catch (error) {
+    console.error("Error marking order as packed:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to mark as packed",
+    };
+  }
+}
+
+// Warehouse: Assign deliveryman to packed order
+export async function assignDeliveryman(
+  orderId: string,
+  deliverymanId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "warehouse" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only warehouse employees can assign deliverymen",
+      };
+    }
+
+    // Get order to check if it's packed
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    if (!order.packedBy) {
+      return {
+        success: false,
+        message: "Order must be packed before assigning to deliveryman",
+      };
+    }
+
+    const deliveryman = await backendClient.fetch(
+      `*[_type == "user" && _id == $deliverymanId && isEmployee == true && employeeRole == "deliveryman"][0]`,
+      { deliverymanId }
+    );
+
+    if (!deliveryman) {
+      return { success: false, message: "Deliveryman not found" };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        assignedDeliverymanId: deliverymanId,
+        assignedDeliverymanName: `${deliveryman.firstName} ${deliveryman.lastName}`,
+        dispatchedBy: employee.email,
+        dispatchedAt: new Date().toISOString(),
+        status: "ready_for_delivery",
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Assigned for Delivery",
+      employee.email,
+      employee.employeeRole,
+      notes || `Assigned to ${deliveryman.firstName} ${deliveryman.lastName}`
+    );
+
+    // Update warehouse employee performance
+    const currentPerformance = employee.employeePerformance || {};
+    await updateEmployeePerformance(employee._id, {
+      ordersProcessed: (currentPerformance.ordersProcessed || 0) + 1,
+      ordersAssignedForDelivery:
+        (currentPerformance.ordersAssignedForDelivery || 0) + 1,
+    });
+
+    return {
+      success: true,
+      message: `Order assigned to ${deliveryman.firstName} ${deliveryman.lastName}`,
+    };
+  } catch (error) {
+    console.error("Error assigning deliveryman:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to assign deliveryman",
+    };
+  }
+}
+
+// Deliveryman: Mark as delivered (with cash collection check)
+export async function markAsDelivered(
+  orderId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "deliveryman" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only deliverymen can mark orders as delivered",
+      };
+    }
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    // Check if payment is required
+    const isCOD = order.paymentMethod === "cash_on_delivery";
+    const isPending = order.paymentStatus === "pending";
+
+    if ((isCOD || isPending) && !order.cashCollected) {
+      return {
+        success: false,
+        message:
+          "Cash must be collected from customer before marking as delivered",
+      };
+    }
+
+    const updateData: any = {
+      deliveredBy: employee.email,
+      deliveredAt: new Date().toISOString(),
+      deliveryNotes: notes,
+      status: "delivered",
+    };
+
+    await backendClient.patch(orderId).set(updateData).commit();
+
+    await addStatusHistory(
+      orderId,
+      "Delivered",
+      employee.email,
+      employee.employeeRole,
+      notes
+    );
+
+    // Send notification to customer
+    try {
+      await sendOrderStatusNotification({
+        clerkUserId: order.clerkUserId,
+        orderNumber: order.orderNumber,
+        orderId: order._id,
+        status: "delivered",
+      });
+    } catch (notificationError) {
+      console.error(
+        "Failed to send delivered notification:",
+        notificationError
+      );
+    }
+
+    // Update employee performance
+    const currentPerformance = employee.employeePerformance || {};
+    await updateEmployeePerformance(employee._id, {
+      ordersProcessed: (currentPerformance.ordersProcessed || 0) + 1,
+      ordersDelivered: (currentPerformance.ordersDelivered || 0) + 1,
+    });
+
+    // Invalidate caches for instant updates
+    await invalidateOrder(orderId, order.clerkUserId);
+
+    return {
+      success: true,
+      message: "Order delivered successfully",
+    };
+  } catch (error) {
+    console.error("Error marking order as delivered:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to mark as delivered",
+    };
+  }
+}
+
+// Deliveryman: Collect cash from customer (separate from delivery)
+export async function collectCash(
+  orderId: string,
+  cashAmount: number
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "deliveryman" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only deliverymen can collect cash",
+      };
+    }
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    if (order.cashCollected) {
+      return {
+        success: false,
+        message: "Cash has already been collected for this order",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        cashCollected: true,
+        cashCollectedAmount: cashAmount,
+        cashCollectedAt: new Date().toISOString(),
+        paymentStatus: "paid",
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Cash Collected",
+      employee.email,
+      employee.employeeRole,
+      `Cash collected: $${cashAmount}`
+    );
+
+    // Update employee performance
+    const currentPerformance = employee.employeePerformance || {};
+    await updateEmployeePerformance(employee._id, {
+      cashCollected: (currentPerformance.cashCollected || 0) + cashAmount,
+    });
+
+    return {
+      success: true,
+      message: `Cash collected: $${cashAmount}`,
+    };
+  } catch (error) {
+    console.error("Error collecting cash:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to collect cash",
+    };
+  }
+}
+
+// Deliveryman: Start delivery (out for delivery)
+export async function startDelivery(
+  orderId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "deliveryman" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only deliverymen can start delivery",
+      };
+    }
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    if (
+      order.assignedDeliverymanId !== employee._id &&
+      employee.employeeRole !== "incharge"
+    ) {
+      return {
+        success: false,
+        message: "This order is not assigned to you",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        status: "out_for_delivery",
+        deliveryAttempts: (order.deliveryAttempts || 0) + 1,
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Out for Delivery",
+      employee.email,
+      employee.employeeRole,
+      notes
+    );
+
+    // Send notification to customer
+    try {
+      await sendOrderStatusNotification({
+        clerkUserId: order.clerkUserId,
+        orderNumber: order.orderNumber,
+        orderId: order._id,
+        status: "out_for_delivery",
+      });
+    } catch (notificationError) {
+      console.error(
+        "Failed to send out for delivery notification:",
+        notificationError
+      );
+    }
+
+    return {
+      success: true,
+      message: "Delivery started successfully",
+    };
+  } catch (error) {
+    console.error("Error starting delivery:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to start delivery",
+    };
+  }
+}
+
+// Deliveryman: Reschedule delivery
+export async function rescheduleDelivery(
+  orderId: string,
+  newDate: string,
+  reason: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "deliveryman" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only deliverymen can reschedule deliveries",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        status: "rescheduled",
+        rescheduledDate: newDate,
+        rescheduledReason: reason,
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Rescheduled",
+      employee.email,
+      employee.employeeRole,
+      `Rescheduled to ${new Date(newDate).toLocaleDateString()}: ${reason}`
+    );
+
+    return {
+      success: true,
+      message: "Delivery rescheduled successfully",
+    };
+  } catch (error) {
+    console.error("Error rescheduling delivery:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to reschedule delivery",
+    };
+  }
+}
+
+// Deliveryman: Mark delivery as failed
+export async function markDeliveryFailed(
+  orderId: string,
+  reason: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "deliveryman" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only deliverymen can mark delivery as failed",
+      };
+    }
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        status: "failed_delivery",
+        deliveryAttempts: (order.deliveryAttempts || 0) + 1,
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Failed Delivery",
+      employee.email,
+      employee.employeeRole,
+      `Delivery attempt ${(order.deliveryAttempts || 0) + 1} failed: ${reason}`
+    );
+
+    return {
+      success: true,
+      message: "Delivery marked as failed",
+    };
+  } catch (error) {
+    console.error("Error marking delivery as failed:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to mark delivery as failed",
+    };
+  }
+}
+
+// Accounts: Receive payment from deliveryman
+export async function receivePaymentFromDeliveryman(
+  orderId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "accounts" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only accounts employees can receive payments",
+      };
+    }
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    if (!order.cashCollected) {
+      return {
+        success: false,
+        message: "Cash has not been collected for this order",
+      };
+    }
+
+    if (!order.cashSubmittedToAccounts) {
+      return {
+        success: false,
+        message: "Deliveryman has not submitted the cash yet",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        cashSubmissionStatus: "confirmed",
+        paymentReceivedBy: employee.email,
+        paymentReceivedAt: new Date().toISOString(),
+        paymentStatus: "paid",
+        status: "completed",
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Payment Received & Order Completed",
+      employee.email,
+      employee.employeeRole,
+      notes ||
+        `Cash payment received: $${
+          order.cashCollectedAmount || order.totalPrice
+        }`
+    );
+
+    // Update employee performance
+    const currentPerformance = employee.employeePerformance || {};
+    await updateEmployeePerformance(employee._id, {
+      paymentsReceived:
+        (currentPerformance.paymentsReceived || 0) +
+        (order.cashCollectedAmount || order.totalPrice),
+    });
+
+    return { success: true, message: "Payment received successfully" };
+  } catch (error) {
+    console.error("Error receiving payment:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error ? error.message : "Failed to receive payment",
+    };
+  }
+}
+
+// Deliveryman: Submit collected cash to accounts
+export async function submitCashToAccounts(
+  orderId: string,
+  accountsEmployeeId: string,
+  notes?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "deliveryman" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only deliverymen can submit cash to accounts",
+      };
+    }
+
+    // Verify the selected accounts employee exists and is active
+    const accountsEmployee = await backendClient.fetch(
+      `*[_type == "user" && _id == $accountsEmployeeId && isEmployee == true && (employeeRole == "accounts" || employeeRole == "incharge") && employeeStatus == "active"][0]`,
+      { accountsEmployeeId }
+    );
+
+    if (!accountsEmployee) {
+      return {
+        success: false,
+        message: "Please select a valid accounts employee",
+      };
+    }
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    if (!order.cashCollected) {
+      return {
+        success: false,
+        message: "Cash has not been collected for this order",
+      };
+    }
+
+    if (
+      order.cashSubmittedToAccounts &&
+      order.cashSubmissionStatus === "pending"
+    ) {
+      return {
+        success: false,
+        message: "Cash submission is pending review by accounts team",
+      };
+    }
+
+    if (
+      order.cashSubmittedToAccounts &&
+      order.cashSubmissionStatus === "confirmed"
+    ) {
+      return {
+        success: false,
+        message: "Cash has already been confirmed by accounts",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        cashSubmittedToAccounts: true,
+        cashSubmissionStatus: "pending",
+        cashSubmittedBy: employee.email,
+        cashSubmittedAt: new Date().toISOString(),
+        cashSubmissionNotes: notes,
+        assignedAccountsEmployeeId: accountsEmployeeId,
+        assignedAccountsEmployeeName: `${accountsEmployee.firstName} ${accountsEmployee.lastName}`,
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Cash Submitted to Accounts",
+      employee.email,
+      employee.employeeRole,
+      notes ||
+        `Cash submitted to ${accountsEmployee.firstName} ${
+          accountsEmployee.lastName
+        }: $${order.cashCollectedAmount || order.totalPrice}`
+    );
+
+    return {
+      success: true,
+      message: `Cash submitted to ${accountsEmployee.firstName} ${
+        accountsEmployee.lastName
+      }: $${order.cashCollectedAmount || order.totalPrice}`,
+    };
+  } catch (error) {
+    console.error("Error submitting cash to accounts:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to submit cash to accounts",
+    };
+  }
+}
+
+// Accounts: Reject cash submission from deliveryman
+export async function rejectCashSubmission(
+  orderId: string,
+  rejectionReason: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true && (employeeRole == "accounts" || employeeRole == "incharge")][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return {
+        success: false,
+        message: "Only accounts employees can reject cash submissions",
+      };
+    }
+
+    // Get current order
+    const order = await backendClient.fetch(
+      `*[_type == "order" && _id == $orderId][0]`,
+      { orderId }
+    );
+
+    if (!order.cashSubmittedToAccounts) {
+      return {
+        success: false,
+        message: "No cash submission found for this order",
+      };
+    }
+
+    if (order.cashSubmissionStatus === "confirmed") {
+      return {
+        success: false,
+        message: "Cannot reject a confirmed cash submission",
+      };
+    }
+
+    if (!rejectionReason || rejectionReason.trim() === "") {
+      return {
+        success: false,
+        message: "Please provide a reason for rejection",
+      };
+    }
+
+    await backendClient
+      .patch(orderId)
+      .set({
+        cashSubmissionStatus: "rejected",
+        cashSubmissionRejectionReason: rejectionReason,
+        cashSubmittedToAccounts: false,
+        assignedAccountsEmployeeId: null,
+        assignedAccountsEmployeeName: null,
+      })
+      .commit();
+
+    await addStatusHistory(
+      orderId,
+      "Cash Submission Rejected",
+      employee.email,
+      employee.employeeRole,
+      `Rejected by ${employee.firstName} ${employee.lastName}: ${rejectionReason}`
+    );
+
+    return {
+      success: true,
+      message: "Cash submission rejected. Deliveryman can resubmit.",
+    };
+  } catch (error) {
+    console.error("Error rejecting cash submission:", error);
+    return {
+      success: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to reject cash submission",
+    };
+  }
+}
+
+// Get orders for employee role
+export async function getOrdersForEmployee() {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return [];
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return [];
+    }
+
+    let filter = "";
+    let salesContactId = "";
+    const includeSalesDetails = ["callcenter", "incharge"].includes(
+      employee.employeeRole
+    );
+
+    switch (employee.employeeRole) {
+      case "callcenter":
+        // Show orders assigned to this sales contact or unassigned orders
+        salesContactId = (await ensureSalesContactForEmployee(employee))?._id || "";
+        filter = `*[_type == "order" && status in ["quotation_requested", "pending", "address_confirmed", "order_confirmed"] && (
+          (!defined(salesContact) && !defined(quotationDetails.salesContact)) ||
+          salesContact._ref == $salesContactId ||
+          quotationDetails.salesContact._ref == $salesContactId
+        )] | order(orderDate desc)`;
+        break;
+      case "packer":
+        // Show all confirmed orders (both packed and unpacked)
+        filter = `*[_type == "order" && defined(orderConfirmedBy) && status in ["order_confirmed", "packed"]] | order(orderConfirmedAt desc)`;
+        break;
+      case "warehouse":
+        // Show packed orders ready for delivery assignment
+        filter = `*[_type == "order" && status in ["packed", "ready_for_delivery"]] | order(packedAt desc)`;
+        break;
+      case "deliveryman":
+        // Show orders assigned to this deliveryman
+        filter = `*[_type == "order" && assignedDeliverymanId == $employeeId && status in ["ready_for_delivery", "out_for_delivery", "delivered", "rescheduled", "failed_delivery"]] | order(dispatchedAt desc)`;
+        break;
+      case "incharge":
+      case "accounts":
+        // Show all orders
+        filter = `*[_type == "order"] | order(orderDate desc)`;
+        break;
+      default:
+        return [];
+    }
+
+    const salesFields = includeSalesDetails
+      ? `
+        salesContact->{
+          _id,
+          name,
+          phone,
+          ext,
+          fax,
+          mobile,
+          lineId,
+          lineExt,
+          email,
+          web,
+          terms{
+            paymentCondition,
+            deliveryCondition,
+            validityCondition,
+            warrantyCondition
+          }
+        },
+        quotationDetails{
+          name,
+          email,
+          contactEmail,
+          lineId,
+          phone,
+          fax,
+          company,
+          customerCode,
+          winCode,
+          taxId,
+          branch,
+          address,
+          city,
+          state,
+          zip,
+          country,
+          countryCode,
+          stateCode,
+          subArea,
+          type,
+          salesContact->{
+            _id,
+            name,
+            phone,
+            ext,
+            fax,
+            mobile,
+            lineId,
+            lineExt,
+            email,
+            web,
+            terms{
+              paymentCondition,
+              deliveryCondition,
+              validityCondition,
+              warrantyCondition
+            }
+          }
+        },
+        selectedQuotation->{
+          _id,
+          number,
+          version,
+          createdAt,
+          pdfUrl
+        },
+        selectedQuotationAt,
+        "quotations": *[_type == "quotation" && order._ref == ^._id] | order(version asc, createdAt asc) {
+          _id,
+          number,
+          version,
+          createdAt,
+          emailSentAt,
+          pdfUrl
+        },
+      `
+      : "";
+
+    const orders = await backendClient.fetch(
+      `${filter} {
+        _id,
+        orderNumber,
+        customerName,
+        email,
+        phone,
+        clerkUserId,
+        totalPrice,
+        currency,
+        status,
+        paymentStatus,
+        paymentMethod,
+        orderDate,
+        "shippingAddress": address,
+        products[] {
+          _key,
+          quantity,
+          product-> {
+            _id,
+            name,
+            price,
+            "image": image.asset->url
+          }
+        },
+        addressConfirmedBy,
+        addressConfirmedAt,
+        orderConfirmedBy,
+        orderConfirmedAt,
+        packedBy,
+        packedAt,
+        packingNotes,
+        assignedWarehouseBy,
+        assignedWarehouseAt,
+        dispatchedBy,
+        dispatchedAt,
+        assignedDeliverymanId,
+        assignedDeliverymanName,
+        deliveredBy,
+        deliveredAt,
+        deliveryNotes,
+        deliveryAttempts,
+        rescheduledDate,
+        rescheduledReason,
+        cashCollected,
+        cashCollectedAmount,
+        cashCollectedAt,
+        paymentReceivedBy,
+        paymentReceivedAt,
+        stripePaymentIntentId,
+        stripeCheckoutSessionId,
+        paymentCompletedAt,
+        ${salesFields}
+        statusHistory
+      }`,
+      { employeeId: employee._id, salesContactId }
+    );
+
+    return orders;
+  } catch (error) {
+    console.error("Error fetching employee orders:", error);
+    return [];
+  }
+}
+
+// Get orders for accounts department
+export async function getOrdersForAccounts() {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return [];
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return [];
+    }
+
+    // Only accounts and incharge can access
+    if (!["accounts", "incharge"].includes(employee.employeeRole)) {
+      return [];
+    }
+
+    // Get orders with cash submitted to accounts, already received, or paid online via Stripe
+    const orders = await backendClient.fetch(
+      `*[_type == "order" && (cashSubmittedToAccounts == true || paymentReceivedBy != null || stripePaymentIntentId != null)] | order(coalesce(cashSubmittedAt, paymentCompletedAt, orderDate) desc) {
+        _id,
+        orderNumber,
+        customerName,
+        email,
+        phone,
+        clerkUserId,
+        totalPrice,
+        currency,
+        status,
+        paymentStatus,
+        paymentMethod,
+        orderDate,
+        "shippingAddress": address,
+        products[] {
+          _key,
+          quantity,
+          product-> {
+            _id,
+            name,
+            price,
+            "image": image.asset->url
+          }
+        },
+        deliveredAt,
+        cashCollected,
+        cashCollectedAmount,
+        cashCollectedAt,
+        cashSubmittedToAccounts,
+        cashSubmittedBy,
+        cashSubmittedAt,
+        cashSubmissionNotes,
+        paymentReceivedBy,
+        paymentReceivedAt,
+        stripePaymentIntentId,
+        stripeCheckoutSessionId,
+        paymentCompletedAt,
+        statusHistory
+      }`
+    );
+
+    return orders;
+  } catch (error) {
+    console.error("Error fetching accounts orders:", error);
+    return [];
+  }
+}
+
+// Get payment statistics for accounts
+export async function getAccountsPaymentStats() {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return null;
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return null;
+    }
+
+    // Only accounts and incharge can access
+    if (!["accounts", "incharge"].includes(employee.employeeRole)) {
+      return null;
+    }
+
+    // Get payment statistics
+    const stats = await backendClient.fetch(
+      `{
+        "totalCodRevenue": *[_type == "order" && paymentMethod == "cash_on_delivery" && defined(totalPrice)].totalPrice,
+        "codPaidRevenue": *[_type == "order" && paymentMethod == "cash_on_delivery" && paymentStatus == "paid" && defined(totalPrice)].totalPrice,
+        "codPendingRevenue": *[_type == "order" && paymentMethod == "cash_on_delivery" && paymentStatus == "pending" && defined(totalPrice)].totalPrice,
+        "cardRevenue": *[_type == "order" && (paymentMethod == "card" || paymentMethod == "stripe") && paymentStatus == "paid" && defined(totalPrice)].totalPrice,
+        "totalCodOrders": count(*[_type == "order" && paymentMethod == "cash_on_delivery"]),
+        "codPaidOrders": count(*[_type == "order" && paymentMethod == "cash_on_delivery" && paymentStatus == "paid"]),
+        "codPendingOrders": count(*[_type == "order" && paymentMethod == "cash_on_delivery" && paymentStatus == "pending"]),
+        "cardOrders": count(*[_type == "order" && (paymentMethod == "card" || paymentMethod == "stripe") && paymentStatus == "paid"])
+      }`
+    );
+
+    // Calculate sums from arrays
+    const totalCodRevenue = Array.isArray(stats.totalCodRevenue)
+      ? stats.totalCodRevenue.reduce(
+          (sum: number, price: number) => sum + (price || 0),
+          0
+        )
+      : 0;
+
+    const codPaidRevenue = Array.isArray(stats.codPaidRevenue)
+      ? stats.codPaidRevenue.reduce(
+          (sum: number, price: number) => sum + (price || 0),
+          0
+        )
+      : 0;
+
+    const codPendingRevenue = Array.isArray(stats.codPendingRevenue)
+      ? stats.codPendingRevenue.reduce(
+          (sum: number, price: number) => sum + (price || 0),
+          0
+        )
+      : 0;
+
+    const cardRevenue = Array.isArray(stats.cardRevenue)
+      ? stats.cardRevenue.reduce(
+          (sum: number, price: number) => sum + (price || 0),
+          0
+        )
+      : 0;
+
+    return {
+      totalCodRevenue,
+      codPaidRevenue,
+      codPendingRevenue,
+      cardRevenue,
+      totalCodOrders: stats.totalCodOrders || 0,
+      codPaidOrders: stats.codPaidOrders || 0,
+      codPendingOrders: stats.codPendingOrders || 0,
+      cardOrders: stats.cardOrders || 0,
+    };
+  } catch (error) {
+    console.error("Error fetching payment stats:", error);
+    return null;
+  }
+}
+
+// Get active accounts employees for selection
+export async function getActiveAccountsEmployees() {
+  try {
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return [];
+    }
+
+    const employee = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId && isEmployee == true][0]`,
+      { clerkUserId }
+    );
+
+    if (!employee) {
+      return [];
+    }
+
+    // Get all active accounts employees
+    const accountsEmployees = await backendClient.fetch(
+      `*[_type == "user" && isEmployee == true && (employeeRole == "accounts" || employeeRole == "incharge") && employeeStatus == "active"] | order(firstName asc) {
+        _id,
+        firstName,
+        lastName,
+        email,
+        employeeRole
+      }`
+    );
+
+    return accountsEmployees;
+  } catch (error) {
+    console.error("Error fetching accounts employees:", error);
+    return [];
+  }
+}
+
+
+================================================================================
+FILE: actions/reviewActions.ts
+
+"use server";
+
+import { client } from "@/sanity/lib/client";
+import { auth } from "@clerk/nextjs/server";
+import { invalidateProductReviews } from "@/lib/cache";
+
+// Types for review actions
+interface SubmitReviewData {
+  productId: string;
+  rating: number;
+  title: string;
+  content: string;
+}
+
+interface ReviewResponse {
+  success: boolean;
+  message: string;
+  reviewId?: string;
+  error?: string;
+}
+
+interface ProductReviewsData {
+  reviews: Array<{
+    _id: string;
+    rating: number;
+    title: string;
+    content: string;
+    helpful: number;
+    isVerifiedPurchase: boolean;
+    createdAt: string;
+    user: {
+      _id: string;
+      firstName: string;
+      lastName: string;
+      profileImage?: {
+        asset: {
+          url: string;
+        };
+      };
+    };
+  }>;
+  averageRating: number;
+  totalReviews: number;
+  ratingDistribution: {
+    fiveStars: number;
+    fourStars: number;
+    threeStars: number;
+    twoStars: number;
+    oneStar: number;
+  };
+}
+
+// Submit a new review
+export async function submitReview(
+  data: SubmitReviewData
+): Promise<ReviewResponse> {
+  try {
+    const { userId } = await auth();
+
+    if (!userId) {
+      return {
+        success: false,
+        message: "You must be logged in to submit a review",
+      };
+    }
+
+    // Get the user from Sanity
+    const sanityUser = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{
+        _id,
+        firstName,
+        lastName
+      }`,
+      { clerkUserId: userId }
+    );
+
+    if (!sanityUser) {
+      return {
+        success: false,
+        message: "User not found",
+      };
+    }
+
+    // Check if user has already reviewed this product
+    const existingReview = await client.fetch(
+      `*[_type == "review" && user._ref == $userId && product._ref == $productId][0]`,
+      { userId: sanityUser._id, productId: data.productId }
+    );
+
+    if (existingReview) {
+      return {
+        success: false,
+        message: "You have already reviewed this product",
+      };
+    }
+
+    // Check if user has purchased this product
+    const hasPurchased = await client.fetch(
+      `count(*[_type == "order" && user._ref == $userId && status == "delivered" && $productId in products[].product._ref]) > 0`,
+      { userId: sanityUser._id, productId: data.productId }
+    );
+
+    // Create the review
+    const review = await client.create({
+      _type: "review",
+      product: {
+        _type: "reference",
+        _ref: data.productId,
+      },
+      user: {
+        _type: "reference",
+        _ref: sanityUser._id,
+      },
+      rating: data.rating,
+      title: data.title,
+      content: data.content,
+      isVerifiedPurchase: hasPurchased,
+      status: "pending",
+      helpful: 0,
+      helpfulBy: [],
+      createdAt: new Date().toISOString(),
+    });
+
+    // Invalidate product reviews cache for instant updates
+    await invalidateProductReviews(data.productId);
+
+    return {
+      success: true,
+      message:
+        "Thank you for your review! It will be published after admin approval.",
+      reviewId: review._id,
+    };
+  } catch (error) {
+    console.error("Error submitting review:", error);
+    return {
+      success: false,
+      message: "Failed to submit review. Please try again.",
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+// Get reviews for a product
+export async function getProductReviews(
+  productId: string
+): Promise<ProductReviewsData | null> {
+  try {
+    // Get approved reviews
+    const reviews = await client.fetch(
+      `*[_type == "review" && product._ref == $productId && status == "approved"] | order(createdAt desc) {
+        _id,
+        rating,
+        title,
+        content,
+        helpful,
+        isVerifiedPurchase,
+        createdAt,
+        user-> {
+          _id,
+          firstName,
+          lastName,
+          profileImage {
+            asset-> {
+              url
+            }
+          }
+        }
+      }`,
+      { productId }
+    );
+
+    if (!reviews || reviews.length === 0) {
+      return {
+        reviews: [],
+        averageRating: 0,
+        totalReviews: 0,
+        ratingDistribution: {
+          fiveStars: 0,
+          fourStars: 0,
+          threeStars: 0,
+          twoStars: 0,
+          oneStar: 0,
+        },
+      };
+    }
+
+    // Calculate statistics
+    const totalReviews = reviews.length;
+    const totalRating = reviews.reduce(
+      (sum: number, review: { rating: number }) => sum + review.rating,
+      0
+    );
+    const averageRating = totalRating / totalReviews;
+
+    // Calculate rating distribution
+    const ratingDistribution = {
+      fiveStars: reviews.filter((r: { rating: number }) => r.rating === 5)
+        .length,
+      fourStars: reviews.filter((r: { rating: number }) => r.rating === 4)
+        .length,
+      threeStars: reviews.filter((r: { rating: number }) => r.rating === 3)
+        .length,
+      twoStars: reviews.filter((r: { rating: number }) => r.rating === 2)
+        .length,
+      oneStar: reviews.filter((r: { rating: number }) => r.rating === 1).length,
+    };
+
+    // Update product with calculated values
+    await client
+      .patch(productId)
+      .set({
+        averageRating: parseFloat(averageRating.toFixed(1)),
+        totalReviews,
+        ratingDistribution,
+      })
+      .commit();
+
+    return {
+      reviews,
+      averageRating: parseFloat(averageRating.toFixed(1)),
+      totalReviews,
+      ratingDistribution,
+    };
+  } catch (error) {
+    console.error("Error fetching product reviews:", error);
+    return null;
+  }
+}
+
+// Mark a review as helpful
+export async function markReviewHelpful(
+  reviewId: string
+): Promise<ReviewResponse> {
+  try {
+    const { userId } = await auth();
+
+    if (!userId) {
+      return {
+        success: false,
+        message: "You must be logged in to mark reviews as helpful",
+      };
+    }
+
+    // Get the user from Sanity
+    const sanityUser = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{
+        _id
+      }`,
+      { clerkUserId: userId }
+    );
+
+    if (!sanityUser) {
+      return {
+        success: false,
+        message: "User not found",
+      };
+    }
+
+    // Get the review
+    const review = await client.fetch(
+      `*[_type == "review" && _id == $reviewId][0]{
+        _id,
+        helpful,
+        helpfulBy[]->_id
+      }`,
+      { reviewId }
+    );
+
+    if (!review) {
+      return {
+        success: false,
+        message: "Review not found",
+      };
+    }
+
+    // Check if user has already marked this review as helpful
+    const alreadyMarked = review.helpfulBy?.includes(sanityUser._id);
+
+    if (alreadyMarked) {
+      // Remove the helpful mark
+      await client
+        .patch(reviewId)
+        .set({
+          helpful: Math.max(0, review.helpful - 1),
+        })
+        .unset([`helpfulBy[_ref == "${sanityUser._id}"]`])
+        .commit();
+
+      return {
+        success: true,
+        message: "Review unmarked as helpful",
+      };
+    } else {
+      // Add the helpful mark
+      await client
+        .patch(reviewId)
+        .set({
+          helpful: review.helpful + 1,
+        })
+        .setIfMissing({ helpfulBy: [] })
+        .append("helpfulBy", [
+          {
+            _type: "reference",
+            _ref: sanityUser._id,
+          },
+        ])
+        .commit();
+
+      return {
+        success: true,
+        message: "Review marked as helpful",
+      };
+    }
+  } catch (error) {
+    console.error("Error marking review as helpful:", error);
+    return {
+      success: false,
+      message: "Failed to mark review as helpful",
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+// Check if user can review a product
+export async function canUserReviewProduct(productId: string): Promise<{
+  canReview: boolean;
+  hasAlreadyReviewed: boolean;
+  hasPurchased: boolean;
+}> {
+  try {
+    const { userId } = await auth();
+
+    if (!userId) {
+      return {
+        canReview: false,
+        hasAlreadyReviewed: false,
+        hasPurchased: false,
+      };
+    }
+
+    // Get the user from Sanity
+    const sanityUser = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{
+        _id
+      }`,
+      { clerkUserId: userId }
+    );
+
+    if (!sanityUser) {
+      return {
+        canReview: false,
+        hasAlreadyReviewed: false,
+        hasPurchased: false,
+      };
+    }
+
+    // Check if user has already reviewed this product
+    const hasAlreadyReviewed = await client.fetch(
+      `count(*[_type == "review" && user._ref == $userId && product._ref == $productId]) > 0`,
+      { userId: sanityUser._id, productId }
+    );
+
+    // Check if user has purchased this product
+    const hasPurchased = await client.fetch(
+      `count(*[_type == "order" && user._ref == $userId && status == "delivered" && $productId in products[].product._ref]) > 0`,
+      { userId: sanityUser._id, productId }
+    );
+
+    return {
+      canReview: !hasAlreadyReviewed,
+      hasAlreadyReviewed,
+      hasPurchased,
+    };
+  } catch (error) {
+    console.error("Error checking if user can review product:", error);
+    return {
+      canReview: false,
+      hasAlreadyReviewed: false,
+      hasPurchased: false,
+    };
+  }
+}
+
+// Admin: Approve a review
+export async function approveReview(
+  reviewId: string,
+  adminEmail: string
+): Promise<ReviewResponse> {
+  try {
+    // Update the review status
+    await client
+      .patch(reviewId)
+      .set({
+        status: "approved",
+        approvedAt: new Date().toISOString(),
+        approvedBy: adminEmail,
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    // Get the product ID to update ratings
+    const review = await client.fetch(
+      `*[_type == "review" && _id == $reviewId][0]{
+        product-> {
+          _id
+        }
+      }`,
+      { reviewId }
+    );
+
+    if (review?.product?._id) {
+      // Trigger recalculation of product ratings
+      await getProductReviews(review.product._id);
+    }
+
+    return {
+      success: true,
+      message: "Review approved successfully",
+    };
+  } catch (error) {
+    console.error("Error approving review:", error);
+    return {
+      success: false,
+      message: "Failed to approve review",
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+// Admin: Reject a review
+export async function rejectReview(
+  reviewId: string,
+  adminNotes?: string
+): Promise<ReviewResponse> {
+  try {
+    await client
+      .patch(reviewId)
+      .set({
+        status: "rejected",
+        updatedAt: new Date().toISOString(),
+        ...(adminNotes && { adminNotes }),
+      })
+      .commit();
+
+    return {
+      success: true,
+      message: "Review rejected successfully",
+    };
+  } catch (error) {
+    console.error("Error rejecting review:", error);
+    return {
+      success: false,
+      message: "Failed to reject review",
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+// Get pending reviews for admin
+export async function getPendingReviews() {
+  try {
+    const reviews = await client.fetch(
+      `*[_type == "review" && status == "pending"] | order(createdAt desc) {
+        _id,
+        rating,
+        title,
+        content,
+        isVerifiedPurchase,
+        createdAt,
+        user-> {
+          _id,
+          firstName,
+          lastName,
+          email,
+          profileImage {
+            asset-> {
+              url
+            }
+          }
+        },
+        product-> {
+          _id,
+          name,
+          slug
+        }
+      }`
+    );
+
+    return reviews;
+  } catch (error) {
+    console.error("Error fetching pending reviews:", error);
+    return [];
+  }
+}
+
+
+================================================================================
+FILE: actions/subscriptionActions.ts
+
+"use server";
+
+import { client, writeClient } from "@/sanity/lib/client";
+
+interface SubscriptionData {
+  email: string;
+  source?: string;
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+interface SubscriptionResponse {
+  success: boolean;
+  message: string;
+  data?: any;
+  error?: string;
+  alreadySubscribed?: boolean;
+}
+
+/**
+ * Subscribe a user to the newsletter
+ * Checks for existing subscription before creating a new one
+ */
+export async function subscribeToNewsletter(
+  subscriptionData: SubscriptionData
+): Promise<SubscriptionResponse> {
+  try {
+    const { email, source = "footer", ipAddress, userAgent } = subscriptionData;
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return {
+        success: false,
+        message: "Please provide a valid email address",
+        error: "Invalid email format",
+      };
+    }
+
+    // Normalize email
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check if email already exists (first check)
+    const existingSubscription = await client.fetch(
+      `*[_type == "subscription" && email == $email][0]`,
+      { email: normalizedEmail }
+    );
+
+    if (existingSubscription) {
+      // If already subscribed and active
+      if (existingSubscription.status === "active") {
+        return {
+          success: false,
+          message:
+            "You're already subscribed to our newsletter! Check your inbox for our latest updates.",
+          alreadySubscribed: true,
+        };
+      }
+
+      // If previously unsubscribed, reactivate
+      if (existingSubscription.status === "unsubscribed") {
+        await writeClient
+          .patch(existingSubscription._id)
+          .set({
+            status: "active",
+            subscribedAt: new Date().toISOString(),
+            unsubscribedAt: null,
+          })
+          .commit();
+
+        return {
+          success: true,
+          message:
+            "Welcome back! You've been successfully resubscribed to our newsletter.",
+          data: { reactivated: true },
+        };
+      }
+    }
+
+    // Double-check before creating (prevents race conditions)
+    const doubleCheck = await client.fetch(
+      `*[_type == "subscription" && email == $email][0]`,
+      { email: normalizedEmail }
+    );
+
+    if (doubleCheck) {
+      return {
+        success: false,
+        message:
+          "You're already subscribed to our newsletter! Check your inbox for our latest updates.",
+        alreadySubscribed: true,
+      };
+    }
+
+    // Create new subscription
+    const newSubscription = await writeClient.create({
+      _type: "subscription",
+      email: normalizedEmail,
+      status: "active",
+      subscribedAt: new Date().toISOString(),
+      source,
+      ipAddress: ipAddress || "unknown",
+      userAgent: userAgent || "unknown",
+    });
+
+    return {
+      success: true,
+      message:
+        "Thank you for subscribing! Check your email for a welcome message.",
+      data: {
+        subscriptionId: newSubscription._id,
+        email: newSubscription.email,
+      },
+    };
+  } catch (error) {
+    console.error("Error subscribing to newsletter:", error);
+    return {
+      success: false,
+      message: "Something went wrong. Please try again later.",
+      error: error instanceof Error ? error.message : "Unknown error occurred",
+    };
+  }
+}
+
+/**
+ * Unsubscribe a user from the newsletter
+ */
+export async function unsubscribeFromNewsletter(
+  email: string
+): Promise<SubscriptionResponse> {
+  try {
+    const subscription = await client.fetch(
+      `*[_type == "subscription" && email == $email && status == "active"][0]`,
+      { email: email.toLowerCase().trim() }
+    );
+
+    if (!subscription) {
+      return {
+        success: false,
+        message: "Email not found in our subscription list",
+      };
+    }
+
+    await writeClient
+      .patch(subscription._id)
+      .set({
+        status: "unsubscribed",
+        unsubscribedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    return {
+      success: true,
+      message: "You have been successfully unsubscribed from our newsletter",
+    };
+  } catch (error) {
+    console.error("Error unsubscribing from newsletter:", error);
+    return {
+      success: false,
+      message: "Failed to unsubscribe. Please try again.",
+      error: error instanceof Error ? error.message : "Unknown error occurred",
+    };
+  }
+}
+
+/**
+ * Check if an email is subscribed
+ */
+export async function checkSubscriptionStatus(
+  email: string
+): Promise<{ subscribed: boolean; status?: string }> {
+  try {
+    const subscription = await client.fetch(
+      `*[_type == "subscription" && email == $email][0]`,
+      { email: email.toLowerCase().trim() }
+    );
+
+    if (!subscription) {
+      return { subscribed: false };
+    }
+
+    return {
+      subscribed: subscription.status === "active",
+      status: subscription.status,
+    };
+  } catch (error) {
+    console.error("Error checking subscription status:", error);
+    return { subscribed: false };
+  }
+}
+
+
+================================================================================
+FILE: actions/userActions.ts
+
+"use server";
+
+import { auth } from "@clerk/nextjs/server";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { client } from "@/sanity/lib/client";
+
+// Types for server actions
+interface CreateUserData {
+  clerkUserId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+}
+
+interface AddToCartData {
+  productId: string;
+  quantity: number;
+  size?: string;
+  color?: string;
+}
+
+interface UpdateCartItemData {
+  productId: string;
+  quantity: number;
+  size?: string;
+  color?: string;
+}
+
+interface CreateAddressData {
+  name: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+  isDefault?: boolean;
+}
+
+// User Management Actions
+export async function createOrUpdateUser(userData: CreateUserData) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    // Check if user already exists
+    const existingUser = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userData.clerkUserId }
+    );
+
+    if (existingUser) {
+      // Update existing user
+      await client
+        .patch(existingUser._id)
+        .set({
+          email: userData.email,
+          firstName: userData.firstName,
+          lastName: userData.lastName,
+          phone: userData.phone,
+          lastLogin: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .commit();
+
+      return existingUser._id;
+    } else {
+      // Create new user
+      const newUser = await client.create({
+        _type: "user",
+        clerkUserId: userData.clerkUserId,
+        email: userData.email,
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        phone: userData.phone,
+        preferences: {
+          newsletter: false,
+          emailNotifications: true,
+          smsNotifications: false,
+          preferredCurrency: "THB",
+          preferredLanguage: "en",
+        },
+        cart: [],
+        wishlist: [],
+        addresses: [],
+        orders: [],
+        loyaltyPoints: 0,
+        totalSpent: 0,
+        isActive: true,
+        lastLogin: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      return newUser._id;
+    }
+  } catch (error) {
+    console.error("Error creating/updating user:", error);
+    throw new Error("Failed to create or update user");
+  }
+}
+
+// Cart Management Actions
+export async function addToCart(data: AddToCartData) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    // Get user document
+    const user = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Check if item already exists in cart
+    const existingCartItem = user.cart?.find(
+      (item: any) =>
+        item.product._ref === data.productId &&
+        item.size === data.size &&
+        item.color === data.color
+    );
+
+    if (existingCartItem) {
+      // Update existing item quantity
+      const updatedCart = user.cart.map((item: any) =>
+        item.product._ref === data.productId &&
+        item.size === data.size &&
+        item.color === data.color
+          ? { ...item, quantity: item.quantity + data.quantity }
+          : item
+      );
+
+      await client
+        .patch(user._id)
+        .set({
+          cart: updatedCart,
+          updatedAt: new Date().toISOString(),
+        })
+        .commit();
+    } else {
+      // Add new item to cart
+      const newCartItem = {
+        product: {
+          _type: "reference",
+          _ref: data.productId,
+        },
+        quantity: data.quantity,
+        size: data.size,
+        color: data.color,
+        addedAt: new Date().toISOString(),
+      };
+
+      await client
+        .patch(user._id)
+        .setIfMissing({ cart: [] })
+        .append("cart", [newCartItem])
+        .set({ updatedAt: new Date().toISOString() })
+        .commit();
+    }
+
+    revalidatePath("/cart");
+    return { success: true };
+  } catch (error) {
+    console.error("Error adding to cart:", error);
+    throw new Error("Failed to add item to cart");
+  }
+}
+
+export async function updateCartItem(data: UpdateCartItemData) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    const user = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const updatedCart = user.cart.map((item: any) =>
+      item.product._ref === data.productId &&
+      item.size === data.size &&
+      item.color === data.color
+        ? { ...item, quantity: data.quantity }
+        : item
+    );
+
+    await client
+      .patch(user._id)
+      .set({
+        cart: updatedCart,
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    revalidatePath("/cart");
+    return { success: true };
+  } catch (error) {
+    console.error("Error updating cart item:", error);
+    throw new Error("Failed to update cart item");
+  }
+}
+
+export async function removeFromCart(
+  productId: string,
+  size?: string,
+  color?: string
+) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    const user = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const updatedCart = user.cart.filter(
+      (item: any) =>
+        !(
+          item.product._ref === productId &&
+          item.size === size &&
+          item.color === color
+        )
+    );
+
+    await client
+      .patch(user._id)
+      .set({
+        cart: updatedCart,
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    revalidatePath("/cart");
+    return { success: true };
+  } catch (error) {
+    console.error("Error removing from cart:", error);
+    throw new Error("Failed to remove item from cart");
+  }
+}
+
+export async function clearCart() {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    const user = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    await client
+      .patch(user._id)
+      .set({
+        cart: [],
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    revalidatePath("/cart");
+    return { success: true };
+  } catch (error) {
+    console.error("Error clearing cart:", error);
+    throw new Error("Failed to clear cart");
+  }
+}
+
+// Wishlist Management Actions
+export async function addToWishlist(productId: string) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    const user = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Check if product is already in wishlist
+    const isInWishlist = user.wishlist?.some(
+      (item: any) => item._ref === productId
+    );
+
+    if (!isInWishlist) {
+      await client
+        .patch(user._id)
+        .setIfMissing({ wishlist: [] })
+        .append("wishlist", [{ _type: "reference", _ref: productId }])
+        .set({ updatedAt: new Date().toISOString() })
+        .commit();
+    }
+
+    revalidatePath("/wishlist");
+    return { success: true };
+  } catch (error) {
+    console.error("Error adding to wishlist:", error);
+    throw new Error("Failed to add item to wishlist");
+  }
+}
+
+export async function removeFromWishlist(productId: string) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    const user = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const updatedWishlist =
+      user.wishlist?.filter((item: any) => item._ref !== productId) || [];
+
+    await client
+      .patch(user._id)
+      .set({
+        wishlist: updatedWishlist,
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    revalidatePath("/wishlist");
+    return { success: true };
+  } catch (error) {
+    console.error("Error removing from wishlist:", error);
+    throw new Error("Failed to remove item from wishlist");
+  }
+}
+
+// Address Management Actions
+export async function createAddress(addressData: CreateAddressData) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    const user = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // If this is set as default, unset all other default addresses
+    if (addressData.isDefault) {
+      const userAddresses = await client.fetch(
+        `*[_type == "address" && user._ref == $userId]`,
+        { userId: user._id }
+      );
+
+      for (const address of userAddresses) {
+        await client.patch(address._id).set({ default: false }).commit();
+      }
+    }
+
+    // Create new address
+    const newAddress = await client.create({
+      _type: "address",
+      name: addressData.name,
+      email: user.email,
+      address: addressData.address,
+      city: addressData.city,
+      state: addressData.state.toUpperCase(),
+      zip: addressData.zip,
+      default: addressData.isDefault || false,
+      user: {
+        _type: "reference",
+        _ref: user._id,
+      },
+      createdAt: new Date().toISOString(),
+    });
+
+    // Add address reference to user
+    await client
+      .patch(user._id)
+      .setIfMissing({ addresses: [] })
+      .append("addresses", [{ _type: "reference", _ref: newAddress._id }])
+      .set({ updatedAt: new Date().toISOString() })
+      .commit();
+
+    revalidatePath("/cart");
+    return { success: true, addressId: newAddress._id };
+  } catch (error) {
+    console.error("Error creating address:", error);
+    throw new Error("Failed to create address");
+  }
+}
+
+export async function updateAddress(
+  addressId: string,
+  addressData: CreateAddressData
+) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    // If this is set as default, unset all other default addresses
+    if (addressData.isDefault) {
+      const user = await client.fetch(
+        `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+        { clerkUserId: userId }
+      );
+
+      if (user) {
+        const userAddresses = await client.fetch(
+          `*[_type == "address" && user._ref == $userId && _id != $addressId]`,
+          { userId: user._id, addressId }
+        );
+
+        for (const address of userAddresses) {
+          await client.patch(address._id).set({ default: false }).commit();
+        }
+      }
+    }
+
+    await client
+      .patch(addressId)
+      .set({
+        name: addressData.name,
+        address: addressData.address,
+        city: addressData.city,
+        state: addressData.state.toUpperCase(),
+        zip: addressData.zip,
+        default: addressData.isDefault || false,
+      })
+      .commit();
+
+    revalidatePath("/cart");
+    return { success: true };
+  } catch (error) {
+    console.error("Error updating address:", error);
+    throw new Error("Failed to update address");
+  }
+}
+
+export async function deleteAddress(addressId: string) {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      throw new Error("User not authenticated");
+    }
+
+    const user = await client.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Remove address reference from user
+    const updatedAddresses =
+      user.addresses?.filter((addr: any) => addr._ref !== addressId) || [];
+
+    await client
+      .patch(user._id)
+      .set({
+        addresses: updatedAddresses,
+        updatedAt: new Date().toISOString(),
+      })
+      .commit();
+
+    // Delete the address document
+    await client.delete(addressId);
+
+    revalidatePath("/cart");
+    return { success: true };
+  } catch (error) {
+    console.error("Error deleting address:", error);
+    throw new Error("Failed to delete address");
+  }
+}
+
+
+================================================================================
+FILE: actions/walletActions.ts
+
+"use server";
+
+import { auth } from "@clerk/nextjs/server";
+import { backendClient } from "@/sanity/lib/backendClient";
+import { v4 as uuidv4 } from "uuid";
+
+// Types
+interface WalletTransaction {
+  id: string;
+  type: "credit_refund" | "credit_manual" | "debit_order" | "debit_withdrawal";
+  amount: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  description: string;
+  orderId?: string;
+  withdrawalRequestId?: string;
+  processedBy?: string;
+  createdAt: string;
+  status: "completed" | "pending" | "failed" | "cancelled";
+}
+
+interface WithdrawalRequest {
+  id: string;
+  amount: number;
+  method: "bank" | "paypal" | "stripe" | "check";
+  bankDetails?: {
+    accountHolderName: string;
+    bankName: string;
+    accountNumber: string;
+    routingNumber?: string;
+    swiftCode?: string;
+  };
+  paypalEmail?: string;
+  status:
+    | "pending"
+    | "approved"
+    | "processing"
+    | "completed"
+    | "rejected"
+    | "cancelled";
+  requestedAt: string;
+  processedAt?: string;
+  processedBy?: string;
+  rejectionReason?: string;
+  notes?: string;
+  transactionId?: string;
+}
+
+/**
+ * Get user's wallet balance
+ */
+export async function getUserWalletBalance(): Promise<{
+  success: boolean;
+  balance?: number;
+  message?: string;
+}> {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ walletBalance }`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    return {
+      success: true,
+      balance: user.walletBalance || 0,
+    };
+  } catch (error) {
+    console.error("Error getting wallet balance:", error);
+    return { success: false, message: "Failed to fetch wallet balance" };
+  }
+}
+
+/**
+ * Get user's wallet transaction history
+ */
+export async function getWalletTransactions(): Promise<{
+  success: boolean;
+  transactions?: WalletTransaction[];
+  message?: string;
+}> {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $clerkUserId][0]{ walletTransactions }`,
+      { clerkUserId: userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    return {
+      success: true,
+      transactions: user.walletTransactions || [],
+    };
+  } catch (error) {
+    console.error("Error getting wallet transactions:", error);
+    return { success: false, message: "Failed to fetch transactions" };
+  }
+}
+
+/**
+ * Add credit to user wallet (used for refunds)
+ * This is called when an order is cancelled
+ */
+export async function addWalletCredit(
+  userId: string,
+  amount: number,
+  description: string,
+  orderId?: string,
+  processedBy?: string
+): Promise<{ success: boolean; message: string; newBalance?: number }> {
+  try {
+    // Get user's current balance
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $userId][0]{ 
+        _id, 
+        walletBalance, 
+        walletTransactions 
+      }`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    const currentBalance = user.walletBalance || 0;
+    const newBalance = currentBalance + amount;
+
+    // Create transaction record
+    const transaction: WalletTransaction = {
+      id: uuidv4(),
+      type: "credit_refund",
+      amount,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      description,
+      orderId,
+      processedBy,
+      createdAt: new Date().toISOString(),
+      status: "completed",
+    };
+
+    // Update user with new balance and transaction
+    await backendClient
+      .patch(user._id)
+      .set({
+        walletBalance: newBalance,
+        walletTransactions: [transaction, ...(user.walletTransactions || [])],
+      })
+      .commit();
+
+    return {
+      success: true,
+      message: "Credit added successfully",
+      newBalance,
+    };
+  } catch (error) {
+    console.error("Error adding wallet credit:", error);
+    return {
+      success: false,
+      message: "Failed to add credit to wallet",
+    };
+  }
+}
+
+/**
+ * Deduct amount from wallet (used during checkout)
+ */
+export async function deductWalletBalance(
+  amount: number,
+  orderId: string
+): Promise<{ success: boolean; message: string; newBalance?: number }> {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $userId][0]{ 
+        _id, 
+        walletBalance, 
+        walletTransactions 
+      }`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    const currentBalance = user.walletBalance || 0;
+
+    if (currentBalance < amount) {
+      return {
+        success: false,
+        message: "Insufficient wallet balance",
+      };
+    }
+
+    const newBalance = currentBalance - amount;
+
+    // Create transaction record
+    const transaction: WalletTransaction = {
+      id: uuidv4(),
+      type: "debit_order",
+      amount,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      description: `Payment for order #${orderId}`,
+      orderId,
+      createdAt: new Date().toISOString(),
+      status: "completed",
+    };
+
+    // Update user
+    await backendClient
+      .patch(user._id)
+      .set({
+        walletBalance: newBalance,
+        walletTransactions: [transaction, ...(user.walletTransactions || [])],
+      })
+      .commit();
+
+    return {
+      success: true,
+      message: "Payment deducted from wallet",
+      newBalance,
+    };
+  } catch (error) {
+    console.error("Error deducting wallet balance:", error);
+    return {
+      success: false,
+      message: "Failed to deduct from wallet",
+    };
+  }
+}
+
+/**
+ * Request withdrawal from wallet
+ */
+export async function requestWithdrawal(data: {
+  amount: number;
+  method: "bank" | "paypal" | "stripe" | "check";
+  bankDetails?: {
+    accountHolderName: string;
+    bankName: string;
+    accountNumber: string;
+    routingNumber?: string;
+    swiftCode?: string;
+  };
+  paypalEmail?: string;
+}): Promise<{ success: boolean; message: string; requestId?: string }> {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    // Validate amount
+    if (data.amount <= 0) {
+      return { success: false, message: "Invalid amount" };
+    }
+
+    // Minimum withdrawal amount
+    if (data.amount < 10) {
+      return { success: false, message: "Minimum withdrawal amount is $10" };
+    }
+
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $userId][0]{ 
+        _id, 
+        walletBalance, 
+        withdrawalRequests 
+      }`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    const currentBalance = user.walletBalance || 0;
+
+    if (currentBalance < data.amount) {
+      return {
+        success: false,
+        message: `Insufficient balance. Available: $${currentBalance.toFixed(
+          2
+        )}`,
+      };
+    }
+
+    // Create withdrawal request
+    const withdrawalRequest: WithdrawalRequest = {
+      id: uuidv4(),
+      amount: data.amount,
+      method: data.method,
+      bankDetails: data.bankDetails,
+      paypalEmail: data.paypalEmail,
+      status: "pending",
+      requestedAt: new Date().toISOString(),
+    };
+
+    // Add withdrawal request
+    await backendClient
+      .patch(user._id)
+      .set({
+        withdrawalRequests: [
+          withdrawalRequest,
+          ...(user.withdrawalRequests || []),
+        ],
+      })
+      .commit();
+
+    return {
+      success: true,
+      message:
+        "Withdrawal request submitted successfully. It will be processed within 3-5 business days.",
+      requestId: withdrawalRequest.id,
+    };
+  } catch (error) {
+    console.error("Error requesting withdrawal:", error);
+    return {
+      success: false,
+      message: "Failed to submit withdrawal request",
+    };
+  }
+}
+
+/**
+ * Get user's withdrawal requests
+ */
+export async function getWithdrawalRequests(): Promise<{
+  success: boolean;
+  requests?: WithdrawalRequest[];
+  message?: string;
+}> {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $userId][0]{ withdrawalRequests }`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    return {
+      success: true,
+      requests: user.withdrawalRequests || [],
+    };
+  } catch (error) {
+    console.error("Error getting withdrawal requests:", error);
+    return { success: false, message: "Failed to fetch withdrawal requests" };
+  }
+}
+
+/**
+ * Cancel withdrawal request (only if pending)
+ */
+export async function cancelWithdrawalRequest(requestId: string): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  try {
+    const { userId } = await auth();
+    if (!userId) {
+      return { success: false, message: "Unauthorized" };
+    }
+
+    const user = await backendClient.fetch(
+      `*[_type == "user" && clerkUserId == $userId][0]{ 
+        _id, 
+        withdrawalRequests 
+      }`,
+      { userId }
+    );
+
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
+
+    const requests = user.withdrawalRequests || [];
+    const request = requests.find((r: WithdrawalRequest) => r.id === requestId);
+
+    if (!request) {
+      return { success: false, message: "Withdrawal request not found" };
+    }
+
+    if (request.status !== "pending") {
+      return {
+        success: false,
+        message: `Cannot cancel request with status: ${request.status}`,
+      };
+    }
+
+    // Update request status to cancelled
+    const updatedRequests = requests.map((r: WithdrawalRequest) =>
+      r.id === requestId ? { ...r, status: "cancelled" as const } : r
+    );
+
+    await backendClient
+      .patch(user._id)
+      .set({ withdrawalRequests: updatedRequests })
+      .commit();
+
+    return {
+      success: true,
+      message: "Withdrawal request cancelled successfully",
+    };
+  } catch (error) {
+    console.error("Error cancelling withdrawal request:", error);
+    return {
+      success: false,
+      message: "Failed to cancel withdrawal request",
+    };
+  }
+}
+
+
+================================================================================
+FILE: actions/wishlistActions.ts
+
+

@@ -1,0 +1,1561 @@
+<!DOCTYPE html>
+<!--
+  quotation_base_template.html
+  Purpose: Quotation / ใบเสนอราคา template (A4) with *single-page source* + client-side pagination.
+  Design reference: deepseek_html_20260106_bdd477.html
+  How it works:
+  - The HTML contains ONE .page block.
+  - On load, JS duplicates the .page block when the content would exceed the A4 content box,
+    moves item rows to the next page(s), and updates page numbering.
+  - Totals/terms/signatures are kept on the LAST page only (moved forward as pages are added).
+  - Designed to be compatible with the existing server-side placeholder replacement used by:
+      app/api/orders/[orderId]/purchase-order (GET/POST)
+-->
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&display=swap"
+  />
+  <style>
+    /* =========================================================
+       Page setup (A4) — IMPORTANT
+       Margin box is handled by @page. The .page height is set to
+       the printable content height (A4 - top/bottom margins).
+       ========================================================= */
+    @page { size: A4; margin: 0; }
+
+    :root {
+  /* A4 page size */
+  --page-width: 210mm;
+  --page-height: 297mm;
+
+  /* Internal padding (acts as page margins)
+     Content box = A4 - padding:
+       width  = 210 - 10 - 10 = 190mm
+       height = 297 - 12 - 12 = 273mm
+  */
+  --page-pad-top: 12mm;
+  --page-pad-right: 10mm;
+  --page-pad-bottom: 12mm;
+  --page-pad-left: 10mm;
+
+  --ink: #111;
+  --line: #888;
+  --line-strong: #000;
+  --accent: #1c5d7a;
+  --shade: #f4f4f4;
+}
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Noto Sans Thai", Tahoma, Arial, sans-serif;
+      font-size: 11px;
+      color: var(--ink);
+      line-height: 1.4;
+    }
+
+    /* Screen preview */
+    @media screen {
+      body { background: #f2f2f2; padding: 10mm 0; }
+      .page {
+        background: #fff;
+        margin: 0 auto 10mm;
+        box-shadow: 0 0 4mm rgba(0,0,0,0.15);
+      }
+    }
+
+    @media screen and (max-width: 600px) {
+      body { zoom: 0.85; }
+    }
+
+    /* Print */
+    @media print {
+      body { background: none; padding: 0; }
+      .page {
+        margin: 0;
+        box-shadow: none;
+        break-after: page;
+        page-break-after: always;
+      }
+      /* Removed .has-overflow overflow to avoid expanding page content beyond bounds */
+      .page:last-child {
+        break-after: auto;
+        page-break-after: auto;
+      }
+      .items-table thead { display: table-header-group; break-inside: avoid; page-break-inside: avoid; }
+      .items-table tr { break-inside: avoid; page-break-inside: avoid; }
+      /* ensure table header shading prints */
+      .items-table th {
+        background: var(--shade) !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .header,
+      .quotation-header {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
+
+    /* One printed page content box */
+    .page {
+  width: var(--page-width);
+  height: var(--page-height);
+  padding: var(--page-pad-top) var(--page-pad-right) var(--page-pad-bottom) var(--page-pad-left);
+  overflow: hidden; /* prevents accidental bleed outside A4 */
+  position: relative;
+  background: #fff;
+}
+    .page.has-overflow {
+      outline: 1px dashed #b00000;
+    }
+
+    /* =========================================================
+       Header
+       ========================================================= */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+      border-bottom: 1px solid var(--accent);
+      padding-bottom: 10px;
+    }
+
+    .company-info {
+      flex: 1;
+      display: flex;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .logo-box {
+      width: 80px;
+      flex: 0 0 80px;
+    }
+    .logo-img {
+      width: 80px;
+      height: 80px;
+      object-fit: contain;
+      display: none;
+    }
+    .logo-placeholder {
+      width: 80px;
+      height: 80px;
+      border: 1px solid var(--line-strong);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .company-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .company-name-en {
+      font-weight: 700;
+      font-size: 14px;
+      margin-bottom: 2px;
+    }
+    .company-name-th {
+      font-weight: 700;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .company-address {
+      font-size: 11px;
+      line-height: 1.35;
+      margin-bottom: 2px;
+      word-break: break-word;
+    }
+    .tax-id {
+      font-size: 11px;
+      margin-top: 4px;
+      font-weight: 700;
+      word-break: break-word;
+    }
+
+    .quotation-header {
+      width: 270px;
+      text-align: center;
+      border: 1px solid var(--accent);
+      padding: 8px;
+      flex: 0 0 270px;
+    }
+    .quotation-title {
+      font-weight: 700;
+      font-size: 20px;
+      margin-bottom: 4px;
+      color: var(--accent);
+      line-height: 1.15;
+    }
+    .quotation-title span[lang="th"] { font-size: 18px; }
+    .page-number {
+      font-weight: 700;
+      font-size: 13px;
+      line-height: 1.2;
+    }
+
+    /* Top-right 3 boxes (cert / QR / cards) — images supported */
+    .badge-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      justify-content: flex-end;
+      align-items: stretch;
+      flex-wrap: nowrap;
+    }
+    .badge-box {
+      border: 1px solid var(--line-strong);
+      padding: 4px;
+      text-align: center;
+      font-size: 9px;
+      line-height: 1.15;
+      width: 58px;
+      height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .badge-box.cards { width: 78px; font-weight: 700; }
+    .badge-img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+    .badge-fallback {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+    }
+    .badge-fallback img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .badge-title { font-weight: 700; font-size: 10px; }
+    .badge-sub { font-size: 8px; }
+
+    /* Optional bits that should be hidden on continuation pages to gain space */
+    .hide-on-continuation {}
+    .page.is-continuation .hide-on-continuation { display: none; }
+
+    /* =========================================================
+       Customer + Quotation info
+       ========================================================= */
+    .customer-tax-info {
+      font-size: 11px;
+      margin: 8px 0 6px;
+    }
+
+    /* First row: Customer Tax ID + Branch (with dashed separator below) */
+    .tax-branch-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px dashed var(--line);
+    }
+
+    /* Second row: Company contact strip (right-aligned) */
+    .company-contact-row {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 2px;
+      font-size: 11px;
+    }
+
+    .tax-field {
+      display: inline-block;
+      min-width: 140px;
+      border-bottom: 1px solid var(--line-strong);
+      margin-left: 6px;
+      padding: 2px 4px 2px;
+    }
+
+    .info-container {
+      display: flex;
+      gap: 18px;
+      margin: 12px 0 12px;
+    }
+    .info-column { flex: 1; min-width: 0; }
+
+    .info-field {
+      display: flex;
+      margin-bottom: 8px;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .field-label {
+      width: 125px;
+      font-weight: 700;
+      flex-shrink: 0;
+      white-space: normal; /* allow wrapping when EN/TH are combined */
+    }
+    .label-stack {
+      /* EN/TH labels: show on ONE line as "EN / TH" instead of two stacked lines */
+      display: block; /* keep block-level so margins still work */
+      line-height: 1.2;
+      white-space: normal;
+    }
+    .label-stack > span { display: inline; }
+    .label-stack > span[lang="en"]::after { content: " /"; }
+    .label-stack > span[lang="en"]:last-child::after { content: ""; }
+    .field-value {
+      flex: 1;
+      border-bottom: 1px solid var(--line-strong);
+      padding: 2px 5px 2px;
+      min-height: 18px;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .field-value.noborder { border-bottom: none; }
+    .field-value.address-block { white-space: pre-line; }
+    .field-subline {
+      margin-top: 2px;
+      font-size: 11px;
+      line-height: 1.3;
+    }
+    .info-section-title {
+      margin: 6px 0 4px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    /* =========================================================
+       Items table
+       ========================================================= */
+    .note-line {
+      text-align: center;
+      font-style: italic;
+      margin: 8px 0 10px;
+      font-size: 11px;
+      padding: 4px;
+      border-top: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+    }
+
+    table { border-collapse: collapse; }
+
+    .items-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10px;
+      table-layout: fixed;
+    }
+
+    .items-table thead { display: table-header-group; }
+    .items-table th {
+      border: 1px solid var(--line);
+      padding: 6px 4px;
+      text-align: center;
+      font-weight: 700;
+      background: var(--shade);
+    }
+
+    .items-table td {
+      border: 1px solid var(--line);
+      padding: 6px 4px;
+      vertical-align: top;
+      word-break: break-word;
+    }
+
+    /* Match printed-form look: remove horizontal body row lines */
+    .items-table tbody td { border-top: none; border-bottom: none; }
+    .items-table tbody tr:last-child td { border-bottom: 1px solid var(--line-strong); }
+
+    .col-item { width: 6%; }
+    .col-code { width: 17%; }
+    .col-desc { width: 33%; }
+    .col-qty { width: 9%; }
+    .col-unit { width: 8%; }
+    .col-price { width: 10%; }
+    .col-discount { width: 7%; }
+    .col-amount { width: 10%; }
+
+    .td-center { text-align: center; }
+    .td-right { text-align: right; }
+    .td-left { text-align: left; }
+    .td-desc {
+      max-height: 42px;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
+
+    .promo-line { font-size: 10px; color: #0a5; font-weight: 700; }
+
+    /* =========================================================
+       Continue footer for non-last pages
+       ========================================================= */
+    .continue-footer {
+      margin-top: 6px;
+      font-size: 10px;
+      text-align: center;
+      color: #666;
+    }
+    /* Hide "Continued on next page" text by default; it will be shown via JS on overflow pages */
+    .js-continue-footer { display: none; }
+
+    /* =========================================================
+       Promo summary (injected HTML block uses these classes)
+       ========================================================= */
+    .promo-summary { margin-top: 6px; }
+    .promo-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    .promo-table th,
+    .promo-table td {
+      border: 1px solid var(--line);
+      padding: 2px 4px;
+      vertical-align: top;
+    }
+    .promo-table th { font-weight: 700; text-align: left; }
+
+    /* =========================================================
+       Totals / Remarks — last page only
+       ========================================================= */
+    .totals-section {
+      display: flex;
+      margin-top: 10px;
+      border: 1px solid var(--line-strong);
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .remarks-column {
+      flex: 1;
+      padding: 8px;
+      border-right: 1px solid var(--line-strong);
+      min-width: 0;
+    }
+    .totals-column {
+      width: 220px;
+      padding: 8px;
+      flex: 0 0 220px;
+    }
+    .remark-title { font-weight: 700; margin-bottom: 4px; }
+    .remark-content.long-text {
+      font-size: 10px;
+      line-height: 1.3;
+    }
+    .product-line { margin-top: 10px; font-weight: 700; font-size: 10px; }
+    .brand-line { font-size: 10px; margin-top: 2px; }
+
+    .totals-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .totals-table td { padding: 3px 0; vertical-align: bottom; }
+    .totals-table .label { text-align: right; padding-right: 10px; white-space: normal; }
+    .totals-table .value { text-align: right; min-width: 90px; font-weight: 700; }
+
+    /* =========================================================
+       Terms + Signatures — last page only
+       ========================================================= */
+    .terms-section {
+      margin-top: 12px;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .terms-row { display: flex; gap: 16px; }
+    .terms-column { flex: 1; min-width: 0; }
+    .terms-note {
+      margin-top: 6px;
+      font-size: 10px;
+      color: #333;
+    }
+    .term-field { display: flex; margin-bottom: 8px; gap: 10px; }
+    .term-label { width: 140px; font-weight: 700; flex-shrink: 0; }
+    .term-value {
+      flex: 1;
+      border-bottom: 1px solid var(--line-strong);
+      padding: 2px 5px 2px;
+      min-height: 18px;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .special-cash {
+      font-size: 12px;
+      font-weight: 700;
+      text-align: center;
+      margin-top: 20px;
+    }
+
+    .signatures {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 16px;
+      gap: 10px;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+    .signature-box {
+      flex: 1;
+      border: 1px solid var(--line-strong);
+      padding: 12px 10px;
+      text-align: center;
+      min-height: 100px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    }
+    .signature-line {
+      border-top: 1px solid var(--line-strong);
+      margin: 0 auto 8px;
+      width: 90%;
+    }
+    .signature-title { font-weight: 700; margin-top: 0; margin-bottom: 4px; }
+    .signature-date { font-size: 10px; font-weight: 700; }
+    .signature-date .date-value {
+      display: inline-block;
+      min-width: 90px;
+      border-bottom: 1px solid var(--line-strong);
+      margin-left: 6px;
+      padding-bottom: 1px;
+    }
+
+    /* =========================================================
+       Footer values: show ONLY on the last page
+       (structure prints on every page; values are hidden on non-last pages)
+       ========================================================= */
+    .page:not(.is-last) .only-last-value,
+    .page:not(.is-last) .only-last-value * {
+      color: transparent !important;
+      text-shadow: none !important;
+    }
+    .page:not(.is-last) .js-footer-block { display: none; }
+
+
+  </style>
+</head>
+
+<body>
+  <div id="quotation-pages">
+    <!-- SINGLE SOURCE PAGE (duplicated by JS if overflow occurs) -->
+    <div class="page" data-template="quotation-page">
+      <!-- Header -->
+      <div class="header">
+        <div class="company-info">
+          <div class="logo-box">
+            <img
+              class="logo-img"
+              src="{company_logo_url}"
+              alt="Company logo"
+              onload="this.style.display='block'; this.nextElementSibling.style.display='none';"
+              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+            />
+            <div class="logo-placeholder">NCS</div>
+          </div>
+
+          <div class="company-text">
+            <div class="company-name-en" lang="en">{acc_company_name}</div>
+            <div class="company-name-th" lang="th">{acc_company_name_th}</div>
+            <div class="company-address" lang="en">{acc_company_address_en}</div>
+            <div class="company-address" lang="en">Tel. {acc_company_phone_en} Fax {acc_company_fax_en}</div>
+            <div class="company-address" lang="th">{acc_company_address_th}</div>
+            <div class="company-address" lang="th">{acc_company_phone_th} , {acc_company_fax_th}</div>
+            <div class="tax-id">
+              <span lang="th">เลขประจำตัวผู้เสียภาษีอากร</span>
+              <span lang="en">(TAX ID)</span>
+              : {acc_company_tax_id} {acc_company_head_office_label}
+            </div>
+          </div>
+        </div>
+
+        <div class="quotation-header">
+          <div class="quotation-title label-stack">
+            <span lang="en">Quotation</span>
+            <span lang="th">ใบเสนอราคา</span>
+          </div>
+          <div class="page-number label-stack">
+            <span lang="en">Page <span class="js-page-number">{page_number}</span>/<span class="js-total-pages">{total_pages}</span></span>
+            <span lang="th">หน้า <span class="js-page-number">{page_number}</span>/<span class="js-total-pages">{total_pages}</span></span>
+          </div>
+
+          <div class="badge-row">
+            <!-- Box 1: Certification / badge (image preferred) -->
+            <div class="badge-box cert">
+              <img
+                class="badge-img"
+                src="{cert_box_image_url}"
+                alt="Certification"
+                onload="this.style.display='block'; this.nextElementSibling.style.display='none';"
+                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+              />
+              <div class="badge-fallback">{cert_block}</div>
+            </div>
+
+            <!-- Box 2: QR (image preferred) -->
+            <div class="badge-box qr">
+              <img
+                class="badge-img"
+                src="{qr_image_url}"
+                alt="QR"
+                onload="this.style.display='block'; this.nextElementSibling.style.display='none';"
+                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+              />
+              <div class="badge-fallback">
+                <div class="badge-title" lang="en">QR</div>
+                <div class="badge-sub">{qr_label}</div>
+              </div>
+            </div>
+
+            <!-- Box 3: Payment logos (image preferred) -->
+            <div class="badge-box cards" lang="en">
+              <img
+                class="badge-img"
+                src="{payment_logo_image_url}"
+                alt="Payment logos"
+                onload="this.style.display='block'; this.nextElementSibling.style.display='none';"
+                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+              />
+              <div class="badge-fallback">
+                <div class="badge-title">VISA</div>
+                <div class="badge-title">MasterCard</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Customer tax info -->
+      <div class="customer-tax-info">
+        <div class="tax-branch-row">
+          <div><span lang="th">เลขประจำตัวผู้เสียภาษี :</span> <span class="tax-field">{customer_tax_id}</span></div>
+          <div><span lang="th">สาขา</span> <span class="tax-field">{customer_branch}</span></div>
+        </div>
+        <div class="company-contact-row">
+          <div class="company-contact-text js-company-contact" lang="en"><span class="js-acc-email">Email:{acc_company_email}</span><span class="js-acc-comma">, </span><span class="js-acc-line">Line:{acc_company_line_id}</span></div>
+        </div>
+      </div>
+
+      <!-- Customer + Quotation info -->
+      <div class="info-container">
+        <div class="info-column">
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Code</span>
+              <span lang="th">รหัสลูกค้า</span>
+            </div>
+            <div class="field-value">{customer_code}</div>
+          </div>
+          <div class="info-field js-win-code-row">
+            <div class="field-label label-stack">
+              <span lang="en">WIN Code</span>
+              <span lang="th">รหัส WIN</span>
+            </div>
+            <div class="field-value js-win-code">{customer_win_code}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Name</span>
+              <span lang="th">ชื่อผู้ติดต่อ</span>
+            </div>
+            <div class="field-value">{customer_contact}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Company</span>
+              <span lang="th">บริษัทฯ</span>
+            </div>
+            <div class="field-value">
+              <div class="customer-company">{customer_company}</div>
+              <div class="field-subline">Tax ID: {customer_tax_id} (<span class="js-branch-label">{customer_branch}</span>)</div>
+            </div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Address</span>
+              <span lang="th">ที่อยู่</span>
+            </div>
+            <div class="field-value address-block">{customer_address}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Line</span>
+              <span lang="th">ไลน์</span>
+            </div>
+            <div class="field-value js-customer-line">{customer_line_id}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Phone</span>
+              <span lang="th">โทรศัพท์</span>
+            </div>
+            <div class="field-value">{customer_phone}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Fax</span>
+              <span lang="th">โทรสาร</span>
+            </div>
+            <div class="field-value">{customer_fax}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Email</span>
+              <span lang="th">อีเมล์</span>
+            </div>
+            <div class="field-value">{customer_email}</div>
+          </div>
+        </div>
+
+        <div class="info-column">
+          <div class="info-field">
+            <div class="field-label" lang="en">Quotation No.</div>
+            <div class="field-value">{quotation_number}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Date</span>
+              <span lang="th">วันที่</span>
+            </div>
+            <div class="field-value">{quotation_date}</div>
+          </div>
+          <div class="info-section-title label-stack">
+            <span lang="en">Sales Contact</span>
+            <span lang="th">ผู้ติดต่อฝ่ายขาย</span>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Prepared by</span>
+              <span lang="th">ผู้จัดทำ</span>
+            </div>
+            <div class="field-value">{sale_name}</div>
+          </div>
+
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Phone</span>
+              <span lang="th">โทรศัพท์</span>
+            </div>
+            <div class="field-value">
+              {sale_phone} <span lang="en" style="margin-left: 16px;">Ext. {sale_ext}</span>
+            </div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Fax</span>
+              <span lang="th">โทรสาร</span>
+            </div>
+            <div class="field-value">{sale_fax}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Mobile</span>
+              <span lang="th">โทรศัพท์(มือถือ)</span>
+            </div>
+            <div class="field-value">{sale_mobile}</div>
+          </div>
+          <div class="info-field js-sale-line-row">
+            <div class="field-label label-stack">
+              <span lang="en">Sales Line</span>
+              <span lang="th">ไลน์ฝ่ายขาย</span>
+            </div>
+            <div class="field-value js-sale-line">
+              {sale_line_id}
+              <span class="js-sale-line-ext" style="margin-left: 6px;">,{sale_line_ext}</span>
+            </div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Email</span>
+              <span lang="th">อีเมล์</span>
+            </div>
+            <div class="field-value">{sale_email}</div>
+          </div>
+          <div class="info-field">
+            <div class="field-label label-stack">
+              <span lang="en">Web</span>
+              <span lang="th">เว็บไซต์</span>
+            </div>
+            <div class="field-value">{sale_web}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Items -->
+      <div class="note-line" lang="en">We are very needs to order with detail as listed here below :-</div>
+
+      <table class="items-table">
+        <colgroup>
+          <col class="col-item" />
+          <col class="col-code" />
+          <col class="col-desc" />
+          <col class="col-qty" />
+          <col class="col-unit" />
+          <col class="col-price" />
+          <col class="col-discount" />
+          <col class="col-amount" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th><div class="label-stack"><span lang="en">Item</span>
+                <span lang="th">ลำดับ</span></div></th>
+            <th><div class="label-stack"><span lang="en">Code</span>
+                <span lang="th">รหัสสินค้า</span></div></th>
+            <th><div class="label-stack"><span lang="en">Description</span>
+                <span lang="th">รายการ</span></div></th>
+            <th><div class="label-stack"><span lang="en">Quantity</span>
+                <span lang="th">จำนวน</span></div></th>
+            <th><div class="label-stack"><span lang="en">Unit</span>
+                <span lang="th">หน่วย</span></div></th>
+            <th><div class="label-stack"><span lang="en">Unit/Price</span>
+                <span lang="th">ราคา/หน่วย</span></div></th>
+            <th><div class="label-stack"><span lang="en">Discount</span>
+                <span lang="th">ส่วนลด</span></div></th>
+            <th><div class="label-stack"><span lang="en">Amount</span>
+                <span lang="th">จำนวนเงิน</span></div></th>
+          </tr>
+        </thead>
+        <tbody class="js-items-body">
+          {item_rows}
+        </tbody>
+      </table>
+
+      <!-- FOOTER BLOCK (printed on every page; values shown on LAST page only) -->
+      <div class="js-footer-block">
+        <div class="totals-section">
+          <div class="remarks-column">
+            <div class="remark-title label-stack">
+              <span lang="en">Remark</span>
+              <span lang="th">หมายเหตุ :</span>
+            </div>
+            <div class="remark-content js-remark-content">{remark}</div>
+
+            {promotion_summary_block}
+
+            <div class="product-line"><span lang="en">Product :</span> {product_brand_list}</div>
+            <div class="brand-line" lang="en">({currency_display})</div>
+          </div>
+
+          <div class="totals-column">
+            <table class="totals-table">
+              <tr>
+                <td class="label">
+                  <div class="label-stack">
+                    <span lang="en">Sub Total</span>
+                    <span lang="th">รวม</span>
+                  </div>
+                </td>
+                <td class="value only-last-value">{sub_total}</td>
+              </tr>
+              <tr>
+                <td class="label">
+                  <div class="label-stack">
+                    <span lang="en">Discount</span>
+                    <span lang="th">ส่วนลด</span>
+                  </div>
+                </td>
+                <td class="value only-last-value">{discount}</td>
+              </tr>
+              <tr>
+                <td class="label">
+                  <div class="label-stack">
+                    <span lang="en">After Discount</span>
+                    <span lang="th">เงินหลังหักส่วนลด</span>
+                  </div>
+                </td>
+                <td class="value only-last-value">{after_discount}</td>
+              </tr>
+              <tr>
+                <td class="label">
+                  <div class="label-stack">
+                    <span lang="en">Shipping</span>
+                    <span lang="th">ค่าขนส่ง</span>
+                  </div>
+                </td>
+                <td class="value only-last-value">{shipping}</td>
+              </tr>
+              <tr>
+                <td class="label">{vat_label}</td>
+                <td class="value only-last-value">{vat_amount}</td>
+              </tr>
+              <tr>
+                <td class="label">
+                  <div class="label-stack">
+                    <span lang="en"><strong>Grand Total</strong></span>
+                    <span lang="th"><strong>ราคารวม</strong></span>
+                  </div>
+                </td>
+                <td class="value only-last-value"><strong>{grand_total}</strong></td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="terms-section">
+          <div class="terms-row">
+            <div class="terms-column">
+              <div class="term-field">
+                <div class="term-label label-stack">
+                  <span lang="en">Payment</span>
+                  <span lang="th">เงื่อนไข</span>
+                </div>
+                <div class="term-value only-last-value">{payment_condition}</div>
+              </div>
+              <div class="term-field">
+                <div class="term-label label-stack">
+                  <span lang="en">Delivery</span>
+                  <span lang="th">กำหนดส่งของ</span>
+                </div>
+                <div class="term-value only-last-value">{delivery_condition}</div>
+              </div>
+              <div class="term-field">
+                <div class="term-label label-stack">
+                  <span lang="en">Validity</span>
+                  <span lang="th">กำหนดยื่นราคา</span>
+                </div>
+                <div class="term-value only-last-value">{validity_condition}</div>
+              </div>
+              <div class="term-field">
+                <div class="term-label" lang="en">Warranty</div>
+                <div class="term-value only-last-value">{warranty_condition}</div>
+              </div>
+            </div>
+
+            <div class="terms-column">
+              <div class="special-cash" lang="en">Special&nbsp;&nbsp;&nbsp;Cash</div>
+            </div>
+          </div>
+
+          <div class="terms-note" lang="en">
+            Request an updated quotation if your details change.
+          </div>
+
+          <div class="signatures">
+            <div class="signature-box">
+              <div class="signature-line"></div>
+              <div class="signature-title label-stack">
+                <span lang="en">Sale</span>
+                <span lang="th">พนักงานขาย</span>
+              </div>
+              <div class="signature-date"><span class="date-label" lang="en">Date</span> <span class="date-value only-last-value">{sale_date}</span></div>
+            </div>
+
+            <div class="signature-box">
+              <div class="signature-line"></div>
+              <div class="signature-title label-stack">
+                <span lang="en">Manager</span>
+                <span lang="th">ผู้จัดการฝ่ายขาย</span>
+              </div>
+              <div class="signature-date"><span class="date-label" lang="en">Date</span> <span class="date-value only-last-value">{manager_date}</span></div>
+            </div>
+
+            <div class="signature-box">
+              <div class="signature-line"></div>
+              <div class="signature-title label-stack">
+                <span lang="en">Purchaser</span>
+                <span lang="th">ผู้อนุมัติซื้อ</span>
+              </div>
+              <div class="signature-date"><span class="date-label" lang="en">Date</span> <span class="date-value"></span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <div class="continue-footer js-continue-footer">
+        <span lang="en">Continued on next page</span>
+        <span lang="th">มีต่อหน้าถัดไป</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      function __isUnreplacedPlaceholder(text) {
+        return typeof text === "string" && /\{[^}]+\}/.test(text);
+      }
+
+      function __setDisplay(el, show) {
+        if (!el) return;
+        el.style.display = show ? "" : "none";
+      }
+
+      // Cleans up optional fields so empty/unreplaced placeholders don't render as junk text.
+      function cleanupTemplateFields(root) {
+        if (!root) return;
+
+        // Customer Line ID (left column): keep the underline but remove placeholder text
+        const customerLine = root.querySelector(".js-customer-line");
+        if (customerLine) {
+          const t = (customerLine.textContent || "").trim();
+          if (!t || __isUnreplacedPlaceholder(t)) {
+            customerLine.textContent = "";
+          }
+        }
+
+        // WIN Code row: hide when missing/unreplaced
+        const winCodeRow = root.querySelector(".js-win-code-row");
+        const winCode = root.querySelector(".js-win-code");
+        if (winCodeRow && winCode) {
+          const t = (winCode.textContent || "").trim();
+          if (!t || __isUnreplacedPlaceholder(t)) {
+            __setDisplay(winCodeRow, false);
+          } else {
+            __setDisplay(winCodeRow, true);
+          }
+        }
+
+        // Company contact strip (top, right-aligned): Email / Line
+        const contactRow = root.querySelector(".company-contact-row");
+        const contactWrap = root.querySelector(".js-company-contact");
+        const emailEl = root.querySelector(".js-company-contact .js-acc-email");
+        const commaEl = root.querySelector(".js-company-contact .js-acc-comma");
+        const lineEl = root.querySelector(".js-company-contact .js-acc-line");
+
+        let hasEmail = false;
+        let hasLine = false;
+
+        if (emailEl) {
+          const raw = (emailEl.textContent || "");
+          let v = raw.replace(/^Email\s*:/i, "").trim();
+          if (!v || __isUnreplacedPlaceholder(v)) {
+            __setDisplay(emailEl, false);
+          } else {
+            __setDisplay(emailEl, true);
+            hasEmail = true;
+          }
+        }
+
+        if (lineEl) {
+          const raw = (lineEl.textContent || "");
+          let v = raw.replace(/^Line\s*:/i, "").trim();
+          if (!v || __isUnreplacedPlaceholder(v)) {
+            __setDisplay(lineEl, false);
+          } else {
+            __setDisplay(lineEl, true);
+            hasLine = true;
+          }
+        }
+
+        // Show comma only when both Email and Line are present
+        if (commaEl) {
+          __setDisplay(commaEl, hasEmail && hasLine);
+        }
+
+        // Hide the whole row if both are missing
+        if (contactRow) {
+          __setDisplay(contactRow, hasEmail || hasLine);
+        }
+        if (contactWrap) {
+          __setDisplay(contactWrap, hasEmail || hasLine);
+        }
+
+        // Sale Line extension: hide the trailing comma piece when empty/unreplaced
+        const saleLineExt = root.querySelector(".js-sale-line-ext");
+        if (saleLineExt) {
+          const t = (saleLineExt.textContent || "").trim();
+          // Examples to hide: ",", ",{sale_line_ext}", empty string
+          if (!t || t === "," || __isUnreplacedPlaceholder(t)) {
+            saleLineExt.style.display = "none";
+            saleLineExt.textContent = "";
+          } else if (t === ",{sale_line_ext}") {
+            saleLineExt.style.display = "none";
+            saleLineExt.textContent = "";
+          } else if (t.includes("{sale_line_ext}")) {
+            saleLineExt.style.display = "none";
+            saleLineExt.textContent = "";
+          } else {
+            saleLineExt.style.display = "";
+          }
+        }
+
+        // Sale Line row: hide when Line ID is missing/unreplaced
+        const saleLineRow = root.querySelector(".js-sale-line-row");
+        const saleLine = root.querySelector(".js-sale-line");
+        if (saleLineRow && saleLine) {
+          const t = (saleLine.textContent || "").trim();
+          if (!t || __isUnreplacedPlaceholder(t)) {
+            __setDisplay(saleLineRow, false);
+          } else {
+            __setDisplay(saleLineRow, true);
+          }
+        }
+
+        // Branch label (head office vs branch number) in the address block
+        const branchLabel = root.querySelector(".js-branch-label");
+        if (branchLabel) {
+          const raw = (branchLabel.textContent || "").trim();
+          const normalized = raw.replace(/\s+/g, " ").trim();
+          const lower = normalized.toLowerCase();
+          const isMissing =
+            !normalized ||
+            normalized === "-" ||
+            __isUnreplacedPlaceholder(normalized);
+
+          let display = "";
+          if (
+            isMissing ||
+            lower === "0" ||
+            lower === "00000" ||
+            lower === "0000" ||
+            lower === "000" ||
+            lower === "head office" ||
+            lower === "head-office" ||
+            lower === "headoffice" ||
+            lower === "hq" ||
+            lower === "ho" ||
+            normalized === "สำนักงานใหญ่"
+          ) {
+            display = "สำนักงานใหญ่";
+          } else if (normalized.startsWith("สาขา")) {
+            display = normalized;
+          } else if (lower.startsWith("branch")) {
+            const branchValue = normalized.replace(/^branch\s*/i, "").trim();
+            display = branchValue ? `สาขา ${branchValue}` : "สำนักงานใหญ่";
+          } else {
+            display = `สาขา ${normalized}`;
+          }
+
+          branchLabel.textContent = display;
+        }
+      }
+
+      const ROOT_FLAG = "data-quotation-paginated";
+      const CONTAINER_ID = "quotation-pages";
+      const PAGE_SELECTOR = ".page";
+      const ITEMS_BODY_SELECTOR = "tbody.js-items-body";
+      const CONTINUE_SELECTOR = ".js-continue-footer";
+      const PAGE_NO_SELECTOR = ".js-page-number";
+      const TOTAL_NO_SELECTOR = ".js-total-pages";
+      function getDescCell(row) {
+        if (!row) return null;
+        return row.querySelector("td.td-desc") || row.querySelector("td:nth-child(3)") || row.children[2] || null;
+      }
+      const REMARK_SELECTOR = ".js-remark-content";
+
+      const MAX_PAGES = 50;
+      const TOLERANCE_PX = 12;
+      const LONG_REMARK_THRESHOLD = 600;
+      const MAX_REPAGINATE = 2;
+      let repaginateCount = 0;
+
+      function isOverflowing(page) {
+        return page.scrollHeight - page.clientHeight > TOLERANCE_PX;
+      }
+
+      function getItemsBody(page) {
+        return page.querySelector(ITEMS_BODY_SELECTOR);
+      }
+
+      function applyLongTextScaling(root) {
+        const remark = root.querySelector(REMARK_SELECTOR);
+        if (!remark) return;
+        const length = remark.textContent ? remark.textContent.trim().length : 0;
+        if (length > LONG_REMARK_THRESHOLD) {
+          remark.classList.add("long-text");
+        } else {
+          remark.classList.remove("long-text");
+        }
+      }
+
+      function markOverflowingPages(pages) {
+        pages.forEach((page) => {
+          if (isOverflowing(page)) {
+            page.classList.add("has-overflow");
+          } else {
+            page.classList.remove("has-overflow");
+          }
+        });
+      }
+
+      function trimEdgeBreaks(cell) {
+        if (!cell) return;
+        while (cell.firstChild && cell.firstChild.nodeName === "BR") {
+          cell.removeChild(cell.firstChild);
+        }
+        while (cell.lastChild && cell.lastChild.nodeName === "BR") {
+          cell.removeChild(cell.lastChild);
+        }
+      }
+
+      function getLastTextNode(root) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        let last = null;
+        while (walker.nextNode()) {
+          last = walker.currentNode;
+        }
+        return last;
+      }
+
+      function splitTextNodeToFit(textNode, page) {
+        const fullText = textNode.textContent || "";
+        if (!fullText) return null;
+
+        let low = 1;
+        let high = fullText.length;
+        let best = 0;
+
+        while (low <= high) {
+          const mid = Math.floor((low + high) / 2);
+          textNode.textContent = fullText.slice(0, mid);
+          if (!isOverflowing(page)) {
+            best = mid;
+            low = mid + 1;
+          } else {
+            high = mid - 1;
+          }
+        }
+
+        if (!best) {
+          textNode.textContent = fullText;
+          return null;
+        }
+
+        textNode.textContent = fullText.slice(0, best);
+        return fullText.slice(best);
+      }
+
+      function createContinuationRow(row, page) {
+        const descCell = getDescCell(row);
+        if (!descCell) return null;
+
+        const newRow = row.cloneNode(true);
+        const newDescCell = getDescCell(newRow);
+        if (!newDescCell) return null;
+
+        Array.from(newRow.children).forEach((cell) => {
+          cell.innerHTML = "";
+        });
+
+        if (!descCell.childNodes.length) return null;
+
+        while (isOverflowing(page) && descCell.childNodes.length > 1) {
+          newDescCell.insertBefore(descCell.lastChild, newDescCell.firstChild);
+        }
+
+        let targetTextNode = null;
+        let originalText = null;
+        let tailText = null;
+
+        if (isOverflowing(page)) {
+          targetTextNode = getLastTextNode(descCell);
+          if (targetTextNode) {
+            originalText = targetTextNode.textContent || "";
+            tailText = splitTextNodeToFit(targetTextNode, page);
+          }
+        }
+
+        let tailNode = null;
+        if (tailText && tailText.trim()) {
+          tailNode = document.createTextNode(tailText.replace(/^\s+/, ""));
+          newDescCell.insertBefore(tailNode, newDescCell.firstChild);
+        }
+
+        if (isOverflowing(page) || !newDescCell.childNodes.length) {
+          if (targetTextNode && originalText !== null) {
+            targetTextNode.textContent = originalText;
+          }
+          if (tailNode && tailNode.parentNode === newDescCell) {
+            newDescCell.removeChild(tailNode);
+          }
+          while (newDescCell.firstChild) {
+            descCell.appendChild(newDescCell.firstChild);
+          }
+          return null;
+        }
+
+        trimEdgeBreaks(descCell);
+        trimEdgeBreaks(newDescCell);
+
+        return newRow;
+      }
+
+      function splitOverflowingRow(page, templatePage, pages) {
+        if (!isOverflowing(page)) return false;
+        const body = getItemsBody(page);
+        if (!body || body.children.length !== 1) return false;
+
+        const row = body.children[0];
+        const continuationRow = createContinuationRow(row, page);
+        if (!continuationRow) return false;
+
+        const newPage = createContinuationPageClone(templatePage);
+        page.insertAdjacentElement("afterend", newPage);
+
+        const newBody = getItemsBody(newPage);
+        if (!newBody) {
+          newPage.remove();
+          return false;
+        }
+
+        newBody.insertBefore(continuationRow, newBody.firstChild);
+        pages.push(newPage);
+        return true;
+      }
+
+      function resetPagination() {
+        const container = document.getElementById(CONTAINER_ID) || document.body;
+        const pages = Array.from(container.querySelectorAll(PAGE_SELECTOR));
+        if (pages.length <= 1) return;
+
+        const templatePage = pages[0];
+        const templateBody = getItemsBody(templatePage);
+
+        pages.slice(1).forEach((page) => {
+          const body = getItemsBody(page);
+          if (!body || !templateBody) return;
+          while (body.firstElementChild) {
+            templateBody.appendChild(body.firstElementChild);
+          }
+        });
+
+        pages.slice(1).forEach((page) => page.remove());
+        templatePage.classList.remove("is-continuation");
+        templatePage.classList.remove("has-overflow");
+        templatePage.classList.remove("is-last");
+      }
+
+      function moveRowsUntilFits(fromPage, toPage) {
+        const fromBody = getItemsBody(fromPage);
+        const toBody = getItemsBody(toPage);
+        if (!fromBody || !toBody) return false;
+
+        let moved = false;
+        while (isOverflowing(fromPage) && fromBody.lastElementChild) {
+          toBody.insertBefore(fromBody.lastElementChild, toBody.firstElementChild);
+          moved = true;
+        }
+
+        return moved;
+      }
+
+      function createContinuationPageClone(templatePage) {
+        const clone = templatePage.cloneNode(true);
+        clone.classList.remove("has-overflow");
+        clone.classList.remove("is-continuation");
+
+        // Ensure "last page" state is recalculated after pagination
+        clone.classList.remove("is-last");
+
+        // Mark as continuation BEFORE measuring overflow (hides optional rows to gain space)
+        clone.classList.add("is-continuation");
+
+        // Clear item rows
+        const tbody = getItemsBody(clone);
+        if (tbody) tbody.innerHTML = "";
+
+        // Hide "continue" footer by default (we'll show it for non-last pages later)
+        const cont = clone.querySelector(CONTINUE_SELECTOR);
+        if (cont) cont.style.display = "none";
+
+        cleanupTemplateFields(clone);
+
+        return clone;
+      }
+
+      function updateContinueFooters(pages) {
+        pages.forEach((page, idx) => {
+          const cont = page.querySelector(CONTINUE_SELECTOR);
+          if (!cont) return;
+          cont.style.display = idx < pages.length - 1 ? "block" : "none";
+        });
+      }
+
+      function updatePageNumbers(pages) {
+        const total = pages.length;
+        pages.forEach((page, idx) => {
+          page.querySelectorAll(PAGE_NO_SELECTOR).forEach((el) => {
+            el.textContent = String(idx + 1);
+          });
+          page.querySelectorAll(TOTAL_NO_SELECTOR).forEach((el) => {
+            el.textContent = String(total);
+          });
+        });
+      }
+
+
+      function updateLastPageFlag(pages) {
+        pages.forEach((page) => page.classList.remove("is-last"));
+        if (pages.length) {
+          pages[pages.length - 1].classList.add("is-last");
+        }
+      }
+
+
+      function rebalanceForFooters(pages, templatePage) {
+        let guard = 0;
+        let changed = true;
+
+        while (changed && guard < MAX_PAGES) {
+          guard += 1;
+          changed = false;
+
+          updateLastPageFlag(pages);
+          updateContinueFooters(pages);
+
+          for (let i = 0; i < pages.length - 1; i += 1) {
+            if (moveRowsUntilFits(pages[i], pages[i + 1])) {
+              changed = true;
+            }
+          }
+
+          const lastPage = pages[pages.length - 1];
+          if (isOverflowing(lastPage)) {
+            const newPage = createContinuationPageClone(templatePage);
+            lastPage.insertAdjacentElement("afterend", newPage);
+            pages.push(newPage);
+            const moved = moveRowsUntilFits(lastPage, newPage);
+            if (!moved) {
+              const newBody = getItemsBody(newPage);
+              const hasRows = newBody && newBody.children.length > 0;
+              if (!hasRows && isOverflowing(newPage)) {
+                guard = MAX_PAGES;
+              }
+            }
+            const lastBody = getItemsBody(pages[pages.length - 1]);
+            if (lastBody && lastBody.children.length === 1 && isOverflowing(pages[pages.length - 1])) {
+              guard = MAX_PAGES;
+            }
+            changed = true;
+          }
+        }
+      }
+
+      function paginateOnce() {
+        const docEl = document.documentElement;
+        if (docEl.getAttribute(ROOT_FLAG) === "1") return;
+
+        const container = document.getElementById(CONTAINER_ID) || document.body;
+        const templatePage = container.querySelector(PAGE_SELECTOR);
+        if (!templatePage) return;
+        templatePage.classList.remove("has-overflow");
+        templatePage.classList.remove("is-last");
+        cleanupTemplateFields(templatePage);
+        applyLongTextScaling(templatePage);
+
+        // If pages are already present (e.g., a previous run), do nothing.
+        const existingPages = Array.from(container.querySelectorAll(PAGE_SELECTOR));
+        if (existingPages.length > 1) {
+          updatePageNumbers(existingPages);
+          updateContinueFooters(existingPages);
+          updateLastPageFlag(existingPages);
+          markOverflowingPages(existingPages);
+          docEl.setAttribute(ROOT_FLAG, "1");
+          return;
+        }
+
+        templatePage.classList.remove("is-continuation");
+
+        const fitsWithFooter = (() => {
+          templatePage.classList.add("is-last");
+          const fits = !isOverflowing(templatePage);
+          templatePage.classList.remove("is-last");
+          return fits;
+        })();
+
+        if (fitsWithFooter) {
+          updatePageNumbers([templatePage]);
+          updateContinueFooters([templatePage]);
+          updateLastPageFlag([templatePage]);
+          markOverflowingPages([templatePage]);
+          docEl.setAttribute(ROOT_FLAG, "1");
+          return;
+        }
+
+        const pages = [templatePage];
+        let lastPage = templatePage;
+        let guard = 0;
+
+        while (isOverflowing(lastPage) && guard < MAX_PAGES) {
+          guard += 1;
+
+          const newPage = createContinuationPageClone(templatePage);
+          lastPage.insertAdjacentElement("afterend", newPage);
+
+          // Keep totals/terms/signatures on the LAST page:
+          // move the last-only block forward to the newly created page.
+
+          // Move rows from the bottom of the previous page into the top of the new page
+          // until the previous page fits.
+          const moved = moveRowsUntilFits(lastPage, newPage);
+
+          pages.push(newPage);
+          lastPage = newPage;
+          if (!moved) {
+            const lastBody = getItemsBody(lastPage);
+            const hasRows = lastBody && lastBody.children.length > 0;
+            if (!hasRows && isOverflowing(lastPage)) {
+              break;
+            }
+          }
+          const lastBody = getItemsBody(lastPage);
+          if (lastBody && lastBody.children.length === 1 && isOverflowing(lastPage)) {
+            break;
+          }
+        }
+
+        // Update UI
+        updatePageNumbers(pages);
+        updateContinueFooters(pages);
+        updateLastPageFlag(pages);
+        markOverflowingPages(pages);
+
+        docEl.setAttribute(ROOT_FLAG, "1");
+      }
+
+      function repaginate() {
+        if (repaginateCount >= MAX_REPAGINATE) return;
+        repaginateCount += 1;
+        resetPagination();
+        document.documentElement.removeAttribute(ROOT_FLAG);
+        paginatePromise = null;
+        window.__paginateQuotation();
+      }
+
+      // Expose a Promise-based hook so the server-injected print script can await pagination.
+      let paginatePromise = null;
+      window.__paginateQuotation = function () {
+        if (paginatePromise) return paginatePromise;
+
+        paginatePromise = new Promise((resolve) => {
+          // Two RAFs to allow layout to settle
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              try {
+                paginateOnce();
+              } finally {
+                resolve();
+              }
+            });
+          });
+        });
+
+        return paginatePromise;
+      };
+      window.__repaginateQuotation = repaginate;
+
+      // Auto-run on load for correct on-screen preview and downloaded HTML.
+      window.addEventListener("load", () => {
+        const runPagination = () => window.__paginateQuotation();
+        if (document.fonts && document.fonts.ready) {
+          document.fonts.ready.then(runPagination);
+        } else {
+          runPagination();
+        }
+        const rerun = () => window.__repaginateQuotation();
+        document.querySelectorAll("img").forEach((img) => {
+          if (!img) return;
+          if (!img.complete) {
+            img.addEventListener("load", rerun, { once: true });
+            img.addEventListener("error", rerun, { once: true });
+          }
+        });
+});
+    })();
+  </script>
+</body>
+</html>

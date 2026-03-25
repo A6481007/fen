@@ -1,0 +1,1 @@
+Backup created before replacing `sanity/schemaTypes/dealType.ts` with template-based schema update. Original file copied to `code-backups/sanity__schemaTypes__dealType.ts__20251222-004740__template-based-refresh.ts` for rollback if needed.

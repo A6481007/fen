@@ -1,0 +1,78 @@
+route_path,provider,protection,notes
+app/api/addresses/route.ts,clerk,authenticated,User address CRUD uses Clerk session
+app/api/admin/account-requests-summary/route.ts,clerk,admin,Pending account counts guarded by Clerk admin check
+app/api/admin/account-requests/route.ts,clerk,admin,Account requests listing guarded by Clerk admin check
+app/api/admin/analytics/route.ts,clerk,admin,Admin analytics guarded by Clerk + allowlist
+app/api/admin/approve-account/route.ts,clerk,admin,Approve account mutation uses Clerk admin guard
+app/api/admin/business-accounts/approve/route.ts,clerk,admin,Business account approval uses Clerk admin guard
+app/api/admin/business-accounts/route.ts,clerk,admin,Business account listing uses Clerk admin guard
+app/api/admin/cancel-account/route.ts,clerk,admin,Account cancellation uses Clerk admin guard
+app/api/admin/manage-user/route.ts,clerk,admin,User management uses Clerk admin guard
+app/api/admin/notifications/[id]/route.ts,clerk,admin,Notification detail uses Clerk admin guard
+app/api/admin/notifications/route.ts,clerk,admin,Notifications list uses Clerk admin guard
+app/api/admin/notifications/send/route.ts,clerk,admin,Send notification uses Clerk admin guard
+app/api/admin/notifications/sent/route.ts,clerk,admin,Sent notifications uses Clerk admin guard
+app/api/admin/orders/[id]/route.ts,clerk,admin,Order detail uses Clerk admin guard
+app/api/admin/orders/route.ts,clerk,admin,Orders list uses Clerk admin guard
+app/api/admin/premium-accounts/approve/route.ts,clerk,admin,Premium approval uses Clerk admin guard
+app/api/admin/premium-accounts/route.ts,clerk,admin,Premium accounts list uses Clerk admin guard
+app/api/admin/products/route.ts,clerk,admin,Product admin uses Clerk admin guard
+app/api/admin/reject-account/route.ts,clerk,admin,Account rejection uses Clerk admin guard
+app/api/admin/reviews/route.ts,clerk,admin,Reviews moderation uses Clerk admin guard
+app/api/admin/stats/route.ts,clerk,admin,Admin stats uses Clerk admin guard
+app/api/admin/subscriptions/[id]/route.ts,clerk,admin,Subscription detail uses Clerk admin guard
+app/api/admin/subscriptions/cleanup-duplicates/route.ts,clerk,admin,Cleanup uses Clerk admin guard
+app/api/admin/subscriptions/route.ts,clerk,admin,Subscriptions list uses Clerk admin guard
+app/api/admin/users/[userId]/activate/route.ts,clerk,admin,User activation uses Clerk admin guard
+app/api/admin/users/[userId]/delete-sanity/route.ts,clerk,admin,Sanity delete uses Clerk admin guard
+app/api/admin/users/combined/route.ts,clerk,admin,Combined user export uses Clerk admin guard
+app/api/admin/users/route.ts,clerk,admin,User list uses Clerk admin guard
+app/api/admin/users/sync-to-sanity/route.ts,clerk,admin,Sync uses Clerk admin guard
+app/api/analytics/best-sellers/route.ts,none,public,Readonly analytics endpoint intentionally unauthenticated
+app/api/analytics/track/route.ts,none,public,Analytics pixel/track endpoint intentionally unauthenticated
+app/api/cart-abandonment/route.ts,none,public,Public webhook-style cart abandonment ping
+app/api/checkout/clerk/complete/route.ts,clerk,authenticated,Clerk checkout completion uses session
+app/api/checkout/clerk/route.ts,clerk,authenticated,Clerk checkout tokenization uses session
+app/api/checkout/stripe/route.ts,none,public,Stripe checkout webhook/client handler (no session enforcement)
+app/api/contact/route.ts,none,public,Contact form submission is public
+app/api/debug/calculate-points/route.ts,none,internal,Debug endpoint without auth (internal use)
+app/api/debug/create-user/route.ts,none,internal,Debug endpoint without auth (internal use)
+app/api/debug/update-user/route.ts,clerk,authenticated,Debug update uses Clerk session
+app/api/debug/user-status/route.ts,none,internal,Debug endpoint without auth (internal use)
+app/api/events/[slug]/register/route.ts,clerk,authenticated,Event registration uses Clerk session
+app/api/news/rsvp/route.ts,none,public,RSVP submissions accepted without login
+app/api/newsletter/subscribe/route.ts,none,public,Newsletter subscription is public
+app/api/newsletter/unsubscribe/route.ts,none,public,Newsletter unsubscribe is public
+app/api/orders/[orderId]/generate-invoice/route.ts,clerk,authenticated,Invoice generation uses Clerk session
+app/api/orders/[orderId]/pay-now/route.ts,clerk,authenticated,Pay-now uses Clerk session
+app/api/orders/[orderId]/pay/route.ts,clerk,authenticated,Order payment uses Clerk session
+app/api/orders/addresses/route.ts,clerk,authenticated,Order address lookup uses Clerk session
+app/api/orders/count/route.ts,clerk,authenticated,Order count uses Clerk session
+app/api/orders/refund/route.ts,clerk,authenticated,Refund uses Clerk session
+app/api/orders/route.ts,clerk,authenticated,Order creation uses Clerk session
+app/api/orders/send-email/route.ts,clerk,authenticated,Order email uses Clerk session
+app/api/promotions/campaigns/route.ts,clerk,admin,Campaign listing analytics requires Clerk admin guard
+app/api/promotions/eligibility/route.ts,none,public,Eligibility scoring kept public for client usage
+app/api/promotions/track/route.ts,none,public,Promotion track endpoint is public
+app/api/user-data/route.ts,clerk,authenticated,User data endpoint uses Clerk session
+app/api/user/addresses/route.ts,clerk,authenticated,User address endpoint uses Clerk session
+app/api/user/business-apply/route.ts,clerk,authenticated,Business apply uses Clerk session
+app/api/user/cancel-application/route.ts,clerk,authenticated,Application cancellation uses Clerk session
+app/api/user/combined-data/route.ts,clerk,authenticated,Combined data uses Clerk session
+app/api/user/dashboard/stats/route.ts,clerk,authenticated,Dashboard stats uses Clerk session
+app/api/user/employee-status/route.ts,clerk,authenticated,Employee status uses Clerk session
+app/api/user/notifications/[id]/read/route.ts,clerk,authenticated,Notification read uses Clerk session
+app/api/user/notifications/[id]/route.ts,clerk,authenticated,Notification detail uses Clerk session
+app/api/user/notifications/route.ts,clerk,authenticated,Notifications list uses Clerk session
+app/api/user/orders/count/route.ts,clerk,authenticated,User order count uses Clerk session
+app/api/user/orders/route.ts,clerk,authenticated,User orders uses Clerk session
+app/api/user/points/route.ts,clerk,authenticated,Reward points (calculations) use Clerk session
+app/api/user/profile/route.ts,clerk,authenticated,Profile updates use Clerk session
+app/api/user/request-access/route.ts,clerk,authenticated,Request access uses Clerk session
+app/api/user/reviews/route.ts,clerk,authenticated,User reviews use Clerk session
+app/api/user/reward-points/route.ts,none,public,Placeholder endpoint; no auth enforced
+app/api/user/segment-data/route.ts,clerk,authenticated,Segment data uses Clerk session
+app/api/user/settings/route.ts,clerk,authenticated,Settings use Clerk session
+app/api/user/status/route.ts,clerk,authenticated,User status uses Clerk session
+app/api/webhook/route.ts,none,public,General webhook receiver (auth depends on upstream secret headers)
+app/api/webhooks/twilio/status/route.ts,none,public,Twilio status webhook validated via signature not session

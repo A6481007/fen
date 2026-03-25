@@ -1,0 +1,1 @@
+Backup before adjusting Sanity plugin dependency versions to resolve install/Vite import issues. Source: package.json. Backup file: package.json_2025-12-23_10-19-31_sanity-deps-adjust.json. Created 2025-12-23 10:19:31.

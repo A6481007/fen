@@ -1,0 +1,190 @@
+import { DocumentTextIcon } from "@sanity/icons";
+import { defineArrayMember, defineField, defineType } from "sanity";
+
+export const newsType = defineType({
+  name: "news",
+  title: "News",
+  type: "document",
+  icon: DocumentTextIcon,
+  fields: [
+    defineField({
+      name: "title",
+      type: "string",
+      validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: "slug",
+      type: "slug",
+      options: {
+        source: "title",
+      },
+      validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: "publishDate",
+      title: "Publish Date",
+      type: "datetime",
+      validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: "author",
+      type: "reference",
+      to: { type: "author" },
+    }),
+    defineField({
+      name: "content",
+      type: "blockContent",
+    }),
+    defineField({
+      name: "featuredImage",
+      title: "Featured Image",
+      type: "image",
+      options: {
+        hotspot: true,
+      },
+    }),
+    defineField({
+      name: "category",
+      title: "Category",
+      type: "string",
+      initialValue: "general",
+      options: {
+        list: [
+          { title: "Announcement", value: "announcement" },
+          { title: "Partnership", value: "partnership" },
+          { title: "Event Announcement", value: "event_announcement" },
+          { title: "General", value: "general" },
+        ],
+      },
+      validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: "linkedEvent",
+      title: "Linked Event",
+      type: "reference",
+      to: { type: "event" },
+      description:
+        "Attach an event to power event CTAs and locked attachments. Event must exist before linking.",
+    }),
+    defineField({
+      name: "attachments",
+      title: "Attachments",
+      type: "array",
+      of: [
+        defineArrayMember({
+          name: "attachment",
+          title: "Attachment",
+          type: "object",
+          fields: [
+            defineField({
+              name: "title",
+              type: "string",
+              validation: (Rule) => Rule.required(),
+            }),
+            defineField({
+              name: "description",
+              type: "text",
+              rows: 2,
+            }),
+            defineField({
+              name: "file",
+              title: "File",
+              type: "file",
+              options: {
+                storeOriginalFilename: true,
+              },
+              validation: (Rule) =>
+                Rule.custom((file, context) => {
+                  const parent = context.parent as { fileType?: string } | undefined;
+                  const fileType = parent?.fileType;
+                  if (!fileType || fileType === "link") {
+                    return true;
+                  }
+                  const hasAsset = Boolean(
+                    (file as { asset?: { _ref?: string } } | undefined)?.asset?._ref
+                  );
+                  if (hasAsset) {
+                    return true;
+                  }
+                  return "File upload with an asset is required for non-link attachments.";
+                }),
+            }),
+            defineField({
+              name: "fileType",
+              title: "File Type",
+              type: "string",
+              options: {
+                list: [
+                  { title: "PDF", value: "PDF" },
+                  { title: "Image", value: "image" },
+                  { title: "Document", value: "document" },
+                  { title: "Link", value: "link" },
+                ],
+              },
+              validation: (Rule) => Rule.required(),
+            }),
+            defineField({
+              name: "status",
+              title: "Access",
+              type: "string",
+              options: {
+                list: [
+                  { title: "Public", value: "public" },
+                  { title: "Event Locked", value: "event_locked" },
+                ],
+              },
+              validation: (Rule) => Rule.required(),
+            }),
+          ],
+          preview: {
+            select: {
+              title: "title",
+              fileType: "fileType",
+              status: "status",
+            },
+            prepare({ title, fileType, status }) {
+              const badgeParts = [fileType, status === "event_locked" ? "Locked" : "Public"].filter(
+                Boolean
+              );
+              return {
+                title,
+                subtitle: badgeParts.join(" • ") || undefined,
+              };
+            },
+          },
+        }),
+      ],
+      validation: (Rule) =>
+        Rule.custom((attachments, context) => {
+          if (!attachments || attachments.length === 0) {
+            return true;
+          }
+          const document = context.document as { linkedEvent?: { _ref?: string } } | undefined;
+          const hasLinkedEvent = Boolean(document?.linkedEvent);
+          const hasLockedAttachment = (attachments as { status?: string }[]).some(
+            (attachment) => attachment?.status === "event_locked"
+          );
+          if (hasLockedAttachment && !hasLinkedEvent) {
+            return "Event-locked attachments require a linked event.";
+          }
+          return true;
+        }),
+    }),
+  ],
+  preview: {
+    select: {
+      title: "title",
+      category: "category",
+      linkedEventTitle: "linkedEvent.title",
+    },
+    prepare({ title, category, linkedEventTitle }) {
+      const parts = [category, linkedEventTitle ? `Linked to ${linkedEventTitle}` : null].filter(
+        Boolean
+      );
+      return {
+        title,
+        subtitle: parts.join(" • ") || undefined,
+      };
+    },
+  },
+});

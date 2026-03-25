@@ -1,0 +1,1 @@
+Backup before removing deprecated @sanity/scheduled-publishing plugin from Studio config. File: sanity.config.ts -> code-backups/sanity.config.ts__2025-12-23_10-32-03_remove-scheduled-publishing.ts. Created 2025-12-23 10:32:03.

@@ -1,0 +1,142 @@
+"use client";
+
+import FilterPanel, { type FilterConfig } from "@/components/shared/FilterPanel";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useMemo, useTransition } from "react";
+
+type CategoryOption = {
+  label: string;
+  value: string;
+};
+
+type CategoryFilterProps = {
+  categories: CategoryOption[];
+  activeCategory?: string | null;
+  activeSort?: string | null;
+  searchQuery?: string | null;
+  totalCount?: number;
+};
+
+const SORT_OPTIONS = [
+  { label: "Newest", value: "newest" },
+  { label: "Oldest", value: "oldest" },
+  { label: "Most viewed", value: "most-viewed" },
+];
+
+const CategoryFilter = ({
+  categories,
+  activeCategory,
+  activeSort = "newest",
+  searchQuery = "",
+  totalCount,
+}: CategoryFilterProps) => {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [isPending, startTransition] = useTransition();
+
+  const normalizedActiveCategory = activeCategory || "all";
+  const normalizedSort = activeSort || "newest";
+  const normalizedSearch = searchQuery || "";
+
+  const updateParams = useCallback(
+    (next: {
+      category?: string | null;
+      sort?: string | null;
+      search?: string | null;
+      resetPage?: boolean;
+    }) => {
+      const params = new URLSearchParams(searchParams?.toString());
+
+      if (next.category !== undefined) {
+        params.delete("type");
+        if (!next.category || next.category === "all") {
+          params.delete("category");
+        } else {
+          params.set("category", next.category);
+        }
+      }
+
+      if (next.sort !== undefined && next.sort) {
+        params.set("sort", next.sort);
+      }
+
+      if (next.search !== undefined) {
+        const trimmed = (next.search || "").trim();
+        if (trimmed) {
+          params.set("search", trimmed);
+        } else {
+          params.delete("search");
+        }
+      }
+
+      if (next.resetPage !== false) {
+        params.set("page", "1");
+      }
+
+      const queryString = params.toString();
+      const target = queryString ? `${pathname}?${queryString}` : pathname;
+
+      startTransition(() => {
+        router.push(target);
+      });
+    },
+    [pathname, router, searchParams, startTransition]
+  );
+
+  const handleReset = useCallback(
+    () =>
+      updateParams({
+        category: null,
+        sort: "newest",
+        search: null,
+        resetPage: true,
+      }),
+    [updateParams]
+  );
+
+  const filterConfigs: FilterConfig[] = useMemo(
+    () => [
+      {
+        type: "radio",
+        label: "Category",
+        options: categories,
+        value: normalizedActiveCategory,
+        onChange: (value) =>
+          updateParams({
+            category: value === "all" ? null : (value as string),
+          }),
+        disabled: isPending,
+      },
+      {
+        type: "search",
+        label: "Search news",
+        placeholder: "Search articles, releases, or resources",
+        value: normalizedSearch,
+        onChange: (value) => updateParams({ search: (value as string) || null }),
+        debounceMs: 400,
+        disabled: isPending,
+      },
+      {
+        type: "sort",
+        label: "Sort by",
+        options: SORT_OPTIONS,
+        value: normalizedSort,
+        onChange: (value) => updateParams({ sort: value as string, resetPage: true }),
+        disabled: isPending,
+      },
+    ],
+    [categories, normalizedActiveCategory, normalizedSearch, normalizedSort, updateParams, isPending]
+  );
+
+  return (
+    <FilterPanel
+      filters={filterConfigs}
+      onReset={handleReset}
+      resultCount={totalCount}
+      isLoading={isPending}
+    />
+  );
+};
+
+export default CategoryFilter;

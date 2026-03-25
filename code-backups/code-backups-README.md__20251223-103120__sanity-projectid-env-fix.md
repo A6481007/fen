@@ -1,0 +1,1 @@
+Backup before wiring sanity.config.ts to use sanity/env helpers for projectId/dataset fallback to avoid missing projectId error. File: sanity.config.ts -> code-backups/sanity.config.ts__2025-12-23_10-31-20_projectId-env-fix.ts. Created 2025-12-23 10:31:20.

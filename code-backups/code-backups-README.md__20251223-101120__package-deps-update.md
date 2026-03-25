@@ -1,0 +1,1 @@
+Backup created before updating dependencies in package.json for Task 10.1 (adding Sanity color input, scheduled publishing, media plugin, recharts, lucide-react, and @tanstack/react-query). Source: package.json. Backup file: package.json_2025-12-23_10-11-20_add-dependencies.json. Created on 2025-12-23 at 10:11:20.

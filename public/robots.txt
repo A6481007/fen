@@ -1,0 +1,23 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /employee/
+Disallow: /user/
+Disallow: /dashboard/
+Disallow: /studio/
+Disallow: /_next/
+Disallow: /checkout/
+
+User-agent: Googlebot
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /employee/
+Disallow: /user/
+Disallow: /dashboard/
+Disallow: /studio/
+Disallow: /_next/
+Disallow: /checkout/
+
+Sitemap: https://ncsecom.pro/sitemap.xml

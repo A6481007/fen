@@ -1,0 +1,39 @@
+"use client";
+
+import { useEffect, type ReactNode } from "react";
+
+export type AccessLevel = "public" | "event-locked" | "auth-required";
+
+export interface AccessControlProps {
+  children: ReactNode;
+  fallback: ReactNode;
+  accessible: boolean;
+  accessLevel?: AccessLevel;
+  onAccessDenied?: () => void;
+}
+
+const AccessControl = ({
+  children,
+  fallback,
+  accessible,
+  accessLevel = "public",
+  onAccessDenied,
+}: AccessControlProps) => {
+  const resolvedAccessLevel = accessLevel ?? "public";
+
+  useEffect(() => {
+    if (!accessible) {
+      onAccessDenied?.();
+    }
+  }, [accessible, onAccessDenied, resolvedAccessLevel]);
+
+  const content = accessible ? children : fallback;
+
+  return (
+    <span data-access-level={resolvedAccessLevel} style={{ display: "contents" }}>
+      {content}
+    </span>
+  );
+};
+
+export default AccessControl;

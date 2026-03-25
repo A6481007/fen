@@ -1,0 +1,5 @@
+- 2025-11-27 – constants/index.ts → constants_index.ts__20251127__news-nav-update.ts – Added News navigation and quick links updates
+- 2025-11-27 – components/layout/HeaderMenu.tsx → components_layout_HeaderMenu.tsx__20251127__news-mega-dropdown.tsx – Added News mega dropdown
+- 2025-11-27 – components/layout/Sidebar.tsx → components_layout_Sidebar.tsx__20251127__news-sidebar-links.tsx – Added News links to sidebar
+- 2025-11-27 – components/HomeBanner.tsx → components_HomeBanner.tsx__20251127__news-cta.tsx – Added News Hub CTA
+- 2025-11-27 – app/(client)/page.tsx → app_(client)_page.tsx__20251127__news-highlight.tsx – Switch home widget to NewsHighlight

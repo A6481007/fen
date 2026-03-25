@@ -1,0 +1,278 @@
+/**
+ * Identifies how a discount should be calculated when applied to a cart or line item.
+ * - `percentage`: `discountValue` represents a percent (e.g., 10 for 10%).
+ * - `fixed_amount`: `discountValue` represents a currency amount to subtract.
+ */
+export type DiscountType = "percentage" | "fixed_amount";
+
+/**
+ * Metadata for a promotion or deal that has been applied to a cart or line item.
+ */
+export interface AppliedPromotion {
+  /** Indicates whether the adjustment came from a promotion or a bundled deal. */
+  type: "promotion" | "deal";
+  /** Promotion or deal identifier (e.g., Sanity _id or campaign id). */
+  id: string;
+  /** Human-friendly name shown to customers and in receipts. */
+  name: string;
+  /** Optional badge label for UI display. */
+  badgeLabel?: string;
+  /** Optional badge color for UI display. */
+  badgeColor?: string;
+  /** How to interpret `discountValue` when computing the price adjustment. */
+  discountType: DiscountType;
+  /** Raw discount value (percentage or currency) before it is applied. */
+  discountValue: number;
+  /** Absolute discount amount applied to the line or cart total. */
+  discountAmount: number;
+ /** Optional expiry timestamp for the applied promotion. */
+  expiresAt?: string;
+}
+
+/**
+ * Aggregated promotion savings for summary displays.
+ */
+export interface PromotionSummary {
+  /** Promotion or deal identifier (e.g., Sanity _id or campaign id). */
+  id: string;
+  /** Indicates whether the adjustment came from a promotion or a bundled deal. */
+  type: "promotion" | "deal";
+  /** Human-friendly name shown to customers and in receipts. */
+  name: string;
+  /** Total savings attributed to this promotion across all items. */
+  discountAmount: number;
+}
+
+/**
+ * Minimal snapshot of a product to hydrate cart lines without refetching.
+ */
+export interface CartProductSnapshot {
+  id: string;
+  slug?: string | null;
+  name?: string | null;
+  imageUrl?: string | null;
+  price?: number | null;
+  dealerPrice?: number | null;
+  stock?: number | null;
+  variant?: string | null;
+  categories?: string[];
+}
+
+/**
+ * Represents a single product row in the cart with optional promotion context.
+ */
+export interface CartItem {
+  /** Unique cart line identifier (UUID). */
+  id: string;
+  /** Sanity `_id` reference for the product. */
+  productId: string;
+  /** Current product slug used for routing. */
+  productSlug: string;
+  /** Display name of the product at the time it was added. */
+  productName: string;
+  /** Optional variant identifier when the product has multiple options. */
+  variantId?: string;
+  /** Optional human-friendly variant label to render in the cart UI. */
+  variantLabel?: string;
+  /** Optional price option identifier when the product has multiple prices. */
+  priceOptionId?: string;
+  /** Optional human-friendly price option label to render in the cart UI. */
+  priceOptionLabel?: string;
+  /** Quantity of the product in the cart. */
+  quantity: number;
+  /** Original unit price before discounts. */
+  unitPrice: number;
+  /** Promotion or deal applied to this line item, if any. */
+  appliedPromotion?: AppliedPromotion;
+  /** Computed line total: `unitPrice * quantity - discountAmount`. */
+  lineTotal: number;
+  /** Snapshot of the product used when hydrating the cart response. */
+  product?: CartProductSnapshot;
+  /** Optional resolved image URL for the product or variant. */
+  imageUrl?: string | null;
+  /** Optional warnings or validation messages scoped to this line. */
+  messages?: string[];
+  /** Optional stock value to enable guardrails in the UI. */
+  availableStock?: number | null;
+}
+
+/**
+ * Captures a cart session, applied promotions, and computed totals.
+ */
+export interface Cart {
+  /** Cart session identifier (stable per browser/session). */
+  id: string;
+  /** Optional user identifier when the shopper is authenticated. */
+  userId?: string;
+  /** All line items currently in the cart. */
+  items: CartItem[];
+  /** Promotions or deals applied at either the cart or line level. */
+  appliedPromotions: AppliedPromotion[];
+  /** Sum of `unitPrice * quantity` across all items before discounts. */
+  subtotal: number;
+  /** Sum of all discount amounts applied to the cart. */
+  totalDiscount: number;
+  /** Final total after discounts. */
+ total: number;
+  /** Creation timestamp for the cart session. */
+  createdAt: string;
+  /** Last-updated timestamp for the cart session. */
+  updatedAt: string;
+  /** Optional warnings (e.g., partial application of promos). */
+  warnings?: string[];
+  /** Optional cart-level errors when certain lines fail validation. */
+  errors?: string[];
+}
+
+/**
+ * Payload sent to the server to request promotion/deal quotes for a cart snapshot.
+ */
+export interface QuoteRequest {
+  /** Cart identifier for idempotency and session tracking. */
+  cartId: string;
+  /** Optional authenticated user identifier. */
+  userId?: string;
+  /** Current items in the cart (used for server-side validation). */
+  items: CartItem[];
+  /** Promotion codes the shopper entered for validation. */
+  promotionCodes?: string[];
+  /** Promotions already applied client-side that should be revalidated. */
+  activePromotionIds?: string[];
+  /** Optional currency code to clarify pricing context. */
+  currency?: string;
+  /** Request correlation identifier for logging or retries. */
+  requestId?: string;
+}
+
+/**
+ * Server-calculated quote response detailing applied promotions and totals.
+ */
+export interface QuoteResponse {
+  /** Cart identifier matching the quote request. */
+  cartId: string;
+  /** Items returned with any server-calculated promotion adjustments. */
+  items: CartItem[];
+  /** Promotions or deals applied after server validation. */
+  appliedPromotions: AppliedPromotion[];
+  /** Cart subtotal before discounts. */
+  subtotal: number;
+  /** Aggregate discount amount applied to the cart. */
+  totalDiscount: number;
+  /** Final total after all discounts. */
+  total: number;
+  /** Optional expiration timestamp for the quoted discounts. */
+  expiresAt?: string;
+  /** Optional warnings (e.g., partially applied codes or nearing expiry). */
+  warnings?: string[];
+}
+
+/**
+ * Groups cart items by their associated promotion/deal for display purposes.
+ * This enables showing promotions as collapsible sections in the cart.
+ */
+export interface CartPromotionGroup {
+  /** Unique identifier for this group (promotion/deal ID or "ungrouped") */
+  groupId: string;
+  /** Type of grouping */
+  groupType: "promotion" | "deal" | "ungrouped";
+  /** Display name for the group header */
+  displayName: string;
+  /** Short description or tagline */
+  tagline?: string;
+  /** Badge text (e.g., "20% OFF", "Buy 2 Get 1") */
+  badge?: string;
+  /** Badge color for styling */
+  badgeColor?: string;
+  /** Hero/thumbnail image for the promotion */
+  imageUrl?: string;
+  /** Items within this promotion group */
+  items: CartItem[];
+  /** Original total before discount */
+  originalTotal: number;
+  /** Discount amount for this group */
+  discountAmount: number;
+  /** Final total after discount */
+  finalTotal: number;
+  /** Whether this group is expandable/collapsible */
+  isCollapsible: boolean;
+  /** Expiration date if applicable */
+  expiresAt?: string;
+  /** Whether items in this group can be edited */
+  isEditable: boolean;
+  /** Edit restrictions (e.g., bundle must maintain min quantity) */
+  editRestrictions?: {
+    minQuantity?: number;
+    maxQuantity?: number;
+    fixedProducts?: boolean;
+  };
+}
+
+/**
+ * Cart view model optimized for promotion-first display
+ */
+export interface CartViewModel {
+  /** Cart ID */
+  id: string;
+  /** Grouped items for display */
+  groups: CartPromotionGroup[];
+  /** Summary totals */
+  summary: {
+    subtotal: number;
+    totalDiscount: number;
+    total: number;
+    itemCount: number;
+    promotionCount: number;
+    /** Applied promotions with aggregated discount amounts for summary display. */
+    appliedPromotions?: AppliedPromotion[];
+    /** Promotion summaries with aggregated savings for display. */
+    promotionSummaries?: PromotionSummary[];
+  };
+  /** Personalized offers that could be added */
+  suggestedOffers?: Array<{
+    promotionId: string;
+    name: string;
+    tagline: string;
+    badge: string;
+    potentialSavings: number;
+  }>;
+}
+
+/**
+ * Cart item with promotion context for grouping
+ */
+export interface CartItemWithContext extends CartItem {
+  /** Group this item belongs to */
+  groupId: string;
+  /** Whether this item is a "free" item in a BXGY deal */
+  isFreeItem?: boolean;
+  /** Original price before any promotion */
+  originalPrice?: number;
+  /** Individual item savings */
+  itemSavings?: number;
+}
+
+/**
+ * Unified cart API payload containing both raw cart data and a display-friendly view model.
+ */
+export interface CartResponsePayload {
+  cart: Cart;
+  view: CartViewModel;
+}
+
+export interface CartReorderAddedItem {
+  productId: string;
+  productName?: string;
+  productSlug?: string;
+  quantity: number;
+}
+
+export interface CartReorderSkippedItem {
+  productId?: string;
+  productName?: string;
+  reason: string;
+}
+
+export interface CartReorderResponse extends CartResponsePayload {
+  addedItems: CartReorderAddedItem[];
+  skippedItems: CartReorderSkippedItem[];
+}

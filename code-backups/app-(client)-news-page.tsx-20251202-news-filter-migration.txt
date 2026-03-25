@@ -1,0 +1,355 @@
+import Container from "@/components/Container";
+import DynamicBreadcrumb from "@/components/DynamicBreadcrumb";
+import ArticleGrid from "@/components/news/ArticleGrid";
+import CategoryFilter from "@/components/news/CategoryFilter";
+import type { NewsArticleListItem } from "@/components/news/ArticleCard";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import { Separator } from "@/components/ui/separator";
+import {
+  generateItemListSchema,
+  generateNewsArticleSchema,
+} from "@/lib/seo";
+import { getNewsArticles } from "@/sanity/queries";
+import { Megaphone, Sparkles, TimerReset } from "lucide-react";
+import Link from "next/link";
+import type { Metadata } from "next";
+
+const NEWS_PAGE_SIZE = 9;
+
+const CATEGORY_OPTIONS = [
+  { label: "All", value: "all" },
+  { label: "Announcements", value: "announcement" },
+  { label: "Partnerships", value: "partnership" },
+  { label: "Event updates", value: "event_announcement" },
+  { label: "General", value: "general" },
+];
+
+type NewsSearchParams = {
+  category?: string | string[];
+  type?: string | string[];
+  search?: string | string[];
+  sort?: string | string[];
+  page?: string | string[];
+};
+
+export const metadata: Metadata = {
+  title: "Newsroom | Product updates, events, and resources",
+  description:
+    "Stay current with announcements, launch notes, and resource-ready articles from the ShopCart team.",
+};
+
+const parseParam = (value?: string | string[]) =>
+  Array.isArray(value) ? value[0] : value || "";
+
+const calculateAverageReadTime = (articles: NewsArticleListItem[]) => {
+  if (!articles.length) return 2;
+
+  const total = articles.reduce((sum, article) => {
+    const text = article.plainText || article.excerpt || "";
+    const words = text.split(/\s+/).filter(Boolean).length;
+    return sum + Math.max(1, Math.ceil(words / 200));
+  }, 0);
+
+  return Math.max(1, Math.round(total / articles.length));
+};
+
+const buildStructuredData = (articles: NewsArticleListItem[]) => {
+  const articleSchemas = articles
+    .map((article) => generateNewsArticleSchema(article as any))
+    .filter(Boolean);
+
+  const itemListSchema = generateItemListSchema(articles as any, "News Hub", {
+    basePath: "/news",
+  });
+
+  return [...articleSchemas, itemListSchema].filter(Boolean) as Record<string, unknown>[];
+};
+
+const buildPageHref = (page: number, params: { category?: string; search?: string; sort?: string }) => {
+  const query = new URLSearchParams();
+
+  if (params.category) query.set("category", params.category);
+  if (params.search) query.set("search", params.search);
+  if (params.sort) query.set("sort", params.sort);
+  query.set("page", page.toString());
+
+  const qs = query.toString();
+  return qs ? `/news?${qs}` : "/news";
+};
+
+const buildPageList = (totalPages: number, currentPage: number) => {
+  if (totalPages <= 1) return [1];
+
+  const pages: Array<number | "ellipsis"> = [];
+
+  const addPage = (page: number) => {
+    if (!pages.includes(page)) {
+      pages.push(page);
+    }
+  };
+
+  addPage(1);
+
+  const start = Math.max(2, currentPage - 1);
+  const end = Math.min(totalPages - 1, currentPage + 1);
+
+  if (start > 2) {
+    pages.push("ellipsis");
+  }
+
+  for (let page = start; page <= end; page += 1) {
+    addPage(page);
+  }
+
+  if (end < totalPages - 1) {
+    pages.push("ellipsis");
+  }
+
+  if (totalPages > 1) {
+    addPage(totalPages);
+  }
+
+  return pages;
+};
+
+const NewsPage = async ({ searchParams }: { searchParams?: NewsSearchParams }) => {
+  const rawCategoryParam =
+    parseParam(searchParams?.category) || parseParam(searchParams?.type);
+  const categoryParam =
+    rawCategoryParam && rawCategoryParam !== "all" ? rawCategoryParam : "";
+  const searchQuery = parseParam(searchParams?.search);
+  const sortParam = parseParam(searchParams?.sort) || "newest";
+  const pageParam = parseParam(searchParams?.page);
+  const parsedPage = Number.parseInt(pageParam, 10);
+  const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const offset = (page - 1) * NEWS_PAGE_SIZE;
+
+  const newsData = await getNewsArticles(
+    categoryParam || undefined,
+    searchQuery || undefined,
+    NEWS_PAGE_SIZE,
+    offset,
+    sortParam
+  );
+
+  const articles: NewsArticleListItem[] = Array.isArray(newsData?.items)
+    ? (newsData.items as NewsArticleListItem[])
+    : [];
+
+  const totalCount = newsData?.totalCount ?? articles.length ?? 0;
+  const totalPages =
+    newsData?.totalPages ?? (totalCount > 0 ? Math.ceil(totalCount / NEWS_PAGE_SIZE) : 0);
+  const currentPage = Math.min(
+    Math.max(newsData?.currentPage ?? page, 1),
+    Math.max(totalPages, 1)
+  );
+  const normalizedSort = newsData?.sort || sortParam || "newest";
+  const sortForUrl = normalizedSort.replace(/_/g, "-");
+  const structuredData = buildStructuredData(articles);
+  const averageReadTime = calculateAverageReadTime(articles);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-shop_light_bg to-white">
+      {structuredData.map((schema, index) => (
+        <script
+          key={index}
+          type="application/ld+json"
+          // eslint-disable-next-line react/no-danger
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
+        />
+      ))}
+
+      <Container className="pt-6">
+        <DynamicBreadcrumb customItems={[{ label: "News", href: "/news" }]} />
+      </Container>
+
+      <Container className="py-8 sm:py-12">
+        <Card className="overflow-hidden border-0 bg-gradient-to-r from-shop_dark_green to-shop_light_green text-white shadow-xl">
+          <CardContent className="p-6 sm:p-8 lg:p-12">
+            <div className="grid gap-8 lg:grid-cols-[1.5fr,1fr] lg:items-center">
+              <div className="space-y-4">
+                <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-1 text-sm font-semibold uppercase tracking-wide">
+                  <Megaphone className="h-4 w-4" /> Newsroom
+                </div>
+                <h1 className="text-3xl font-bold leading-tight sm:text-4xl lg:text-5xl">
+                  Product news, events, and resource-ready releases
+                </h1>
+                <p className="max-w-3xl text-sm text-white/90 sm:text-base">
+                  Track launches, announcements, and media moments. Every story ships with the
+                  attachments and context partners need to stay informed.
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    asChild
+                    className="bg-white text-shop_dark_green hover:bg-white/90"
+                  >
+                    <Link href="/news/resources">Browse attachments & resources</Link>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    asChild
+                    className="border-white text-white hover:bg-white/10"
+                  >
+                    <Link href="/news/events">View events</Link>
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 rounded-2xl bg-white/10 p-4 sm:grid-cols-3">
+                <div className="rounded-xl bg-white/10 p-4">
+                  <p className="text-xs uppercase tracking-widest text-white/80">
+                    Published stories
+                  </p>
+                  <p className="text-3xl font-bold">
+                    {totalCount.toString().padStart(2, "0")}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-white/10 p-4">
+                  <p className="text-xs uppercase tracking-widest text-white/80">
+                    Avg. read time
+                  </p>
+                  <p className="text-3xl font-bold">{averageReadTime} mins</p>
+                </div>
+                <div className="rounded-xl bg-white/10 p-4">
+                  <p className="text-xs uppercase tracking-widest text-white/80">
+                    Categories
+                  </p>
+                  <p className="text-3xl font-bold">
+                    {(CATEGORY_OPTIONS.length - 1).toString().padStart(2, "0")}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </Container>
+
+      <Container className="py-6 sm:py-8">
+        <CategoryFilter
+          categories={CATEGORY_OPTIONS}
+          activeCategory={rawCategoryParam || "all"}
+          activeSort={sortForUrl}
+          searchQuery={searchQuery}
+          totalCount={totalCount}
+        />
+      </Container>
+
+      <Container className="py-6 sm:py-10">
+        <div className="mb-6 space-y-2">
+          <div className="inline-flex items-center gap-2 rounded-full bg-shop_light_bg px-3 py-1 text-xs font-semibold uppercase tracking-wide text-shop_dark_green">
+            <Sparkles className="h-4 w-4" />
+            Fresh from the newsroom
+          </div>
+          <h2 className="text-2xl font-bold text-shop_dark_green sm:text-3xl">
+            Latest articles & attachments
+          </h2>
+          <p className="text-sm text-gray-600 sm:text-base">
+            Filter by category, search across releases, and sort to find the right update fast.
+          </p>
+        </div>
+
+        <ArticleGrid articles={articles} highlightFirst />
+
+        {totalPages > 1 ? (
+          <div className="mt-10 space-y-3">
+            <Separator />
+            <Pagination>
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    href={buildPageHref(
+                      Math.max(currentPage - 1, 1),
+                      { category: categoryParam, search: searchQuery, sort: sortForUrl }
+                    )}
+                    className={
+                      currentPage <= 1 ? "pointer-events-none opacity-50" : undefined
+                    }
+                  />
+                </PaginationItem>
+
+                {buildPageList(totalPages, currentPage).map((pageNumber, index) => {
+                  if (pageNumber === "ellipsis") {
+                    return (
+                      <PaginationItem key={`ellipsis-${index}`}>
+                        <PaginationEllipsis />
+                      </PaginationItem>
+                    );
+                  }
+
+                  return (
+                    <PaginationItem key={pageNumber}>
+                      <PaginationLink
+                        href={buildPageHref(pageNumber, {
+                          category: categoryParam,
+                          search: searchQuery,
+                          sort: sortForUrl,
+                        })}
+                        isActive={pageNumber === currentPage}
+                      >
+                        {pageNumber}
+                      </PaginationLink>
+                    </PaginationItem>
+                  );
+                })}
+
+                <PaginationItem>
+                  <PaginationNext
+                    href={buildPageHref(
+                      Math.min(currentPage + 1, totalPages),
+                      { category: categoryParam, search: searchQuery, sort: sortForUrl }
+                    )}
+                    className={
+                      currentPage >= totalPages ? "pointer-events-none opacity-50" : undefined
+                    }
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          </div>
+        ) : null}
+      </Container>
+
+      <Container className="pb-12 pt-4 sm:pt-2">
+        <Card className="border-0 bg-gradient-to-r from-shop_light_pink to-light-orange/20">
+          <CardContent className="p-6 sm:p-8 lg:p-12 text-center">
+            <div className="mx-auto max-w-2xl">
+              <TimerReset className="mx-auto mb-4 h-12 w-12 text-shop_dark_green" />
+              <h2 className="text-xl font-bold text-shop_dark_green sm:text-2xl md:text-3xl">
+                Stay in the loop
+              </h2>
+              <p className="mb-6 text-sm text-gray-600 sm:text-base">
+                Subscribe for launch notes, media kits, and new attachment drops as soon as they
+                land.
+              </p>
+              <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
+                <Button className="bg-shop_dark_green hover:bg-shop_light_green" size="lg">
+                  Get news alerts
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="border-shop_dark_green text-shop_dark_green hover:bg-shop_dark_green hover:text-white"
+                  asChild
+                >
+                  <Link href="/news/resources">Open resources</Link>
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </Container>
+    </div>
+  );
+};
+
+export default NewsPage;

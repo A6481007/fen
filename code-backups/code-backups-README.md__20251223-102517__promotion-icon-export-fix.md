@@ -1,0 +1,1 @@
+Backup before changing promotionType icon to resolve missing MegaphoneIcon export error. File: sanity/schemaTypes/promotionType.tsx -> code-backups/sanity__schemaTypes__promotionType.tsx__2025-12-23_10-25-17_icon-export-fix.tsx. Created 2025-12-23 10:25:17.

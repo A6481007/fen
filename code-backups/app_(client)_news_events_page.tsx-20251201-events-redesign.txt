@@ -1,0 +1,249 @@
+import Container from "@/components/Container";
+import DynamicBreadcrumb from "@/components/DynamicBreadcrumb";
+import NewsletterForm from "@/components/NewsletterForm";
+import EventsRsvpForm from "@/components/news/EventsRsvpForm";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { getNewsEvents } from "@/sanity/queries";
+import dayjs from "dayjs";
+import {
+  ArrowRight,
+  Calendar,
+  Clock,
+  MapPin,
+  Sparkles,
+  Ticket,
+} from "lucide-react";
+import Link from "next/link";
+
+type NewsEvent = {
+  _id?: string;
+  title?: string;
+  slug?: { current?: string };
+  summary?: string;
+  contentType?: string;
+  eventStartDate?: string;
+  eventEndDate?: string;
+  eventLocation?: string;
+  eventRsvpUrl?: string;
+  eventDetails?: { date?: string; location?: string; rsvpUrl?: string } | null;
+  mainImage?: unknown;
+};
+
+const EventsPage = async () => {
+  const events: NewsEvent[] = (await getNewsEvents()) ?? [];
+
+  const formatDateRange = (start?: string, end?: string) => {
+    if (!start) return "Date TBA";
+    const startDate = dayjs(start);
+    if (!end) return startDate.format("MMM D, YYYY");
+    const endDate = dayjs(end);
+    if (startDate.isSame(endDate, "day")) {
+      return `${startDate.format("MMM D, YYYY")} · ${startDate.format(
+        "h:mm A"
+      )}-${endDate.format("h:mm A")}`;
+    }
+    return `${startDate.format("MMM D, YYYY")} → ${endDate.format(
+      "MMM D, YYYY"
+    )}`;
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-shop_light_bg to-white">
+      <Container className="pt-6">
+        <DynamicBreadcrumb
+          customItems={[
+            { label: "News", href: "/news" },
+            { label: "Events" },
+          ]}
+        />
+      </Container>
+
+      <Container className="py-10 space-y-10">
+        <section className="space-y-5 text-center lg:text-left">
+          <Badge className="bg-shop_dark_green/10 text-shop_dark_green">
+            Events & News
+          </Badge>
+          <div className="grid gap-6 lg:grid-cols-[2fr_1fr] lg:items-center">
+            <div className="space-y-4">
+              <h1 className="text-3xl sm:text-4xl font-bold text-shop_dark_green">
+                RSVP to upcoming launches, workshops, and newsroom briefings
+              </h1>
+              <p className="text-gray-600 text-lg">
+                Tell us which session you&apos;re attending and we&apos;ll send
+                confirmations, reminders, and resources so you can make the most
+                of every News Hub experience.
+              </p>
+            </div>
+            <div className="flex justify-center lg:justify-end gap-3">
+              <Button
+                asChild
+                className="bg-shop_dark_green hover:bg-shop_light_green"
+              >
+                <a href="#rsvp-form" className="flex items-center gap-2">
+                  <Ticket className="h-4 w-4" />
+                  Reserve my spot
+                </a>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link href="/news" className="flex items-center gap-2">
+                  Browse news
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </Button>
+            </div>
+          </div>
+        </section>
+
+        <div className="grid gap-8 lg:grid-cols-3">
+          <div className="lg:col-span-2 space-y-6">
+            <Card
+              id="rsvp-form"
+              className="shadow-xl border-shop_light_green/30 border bg-white"
+            >
+              <CardHeader className="space-y-3">
+                <CardTitle className="text-2xl text-shop_dark_green flex items-center gap-2">
+                  <Ticket className="h-5 w-5 text-shop_light_green" />
+                  News Hub RSVP
+                </CardTitle>
+                <CardDescription className="text-base text-gray-600">
+                  Share a few details below. Once submitted, we&apos;ll confirm
+                  your seat, email the agenda, and keep you updated if anything
+                  changes.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <EventsRsvpForm />
+              </CardContent>
+            </Card>
+
+            <Card className="shadow-lg border-0 bg-gradient-to-br from-shop_light_pink to-light-orange/20">
+              <CardContent className="p-6 space-y-4">
+                <div className="flex items-center justify-center gap-3 text-shop_dark_green">
+                  <Sparkles className="h-6 w-6" />
+                  <p className="text-sm uppercase tracking-wide font-semibold">
+                    Stay Updated on News & Events
+                  </p>
+                </div>
+                <h3 className="text-2xl font-semibold text-center text-shop_dark_green">
+                  Get invites, recaps, and newsroom stories in your inbox.
+                </h3>
+                <p className="text-center text-gray-700 text-sm">
+                  Opt in once and we&apos;ll keep you looped in with product
+                  launches, community moments, and highlight reels.
+                </p>
+                <div className="bg-white/80 rounded-xl p-4 shadow-sm">
+                  <NewsletterForm />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            <Card className="shadow-lg border-0">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg text-shop_dark_green">
+                  <Calendar className="h-5 w-5" />
+                  Upcoming Experiences
+                </CardTitle>
+                <CardDescription>
+                  A quick look at the next newsroom showcases, workshops, and
+                  studio drops.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {events?.length ? (
+                  <div className="relative pl-6">
+                    <span className="absolute left-2 top-2 bottom-2 w-0.5 bg-gradient-to-b from-shop_light_green to-transparent" />
+                    <div className="space-y-6">
+                      {events.map((event) => (
+                        <div key={event?._id} className="relative">
+                          <span className="absolute -left-4 top-2 h-3 w-3 rounded-full border-2 border-white bg-shop_light_green shadow" />
+                          <div className="space-y-2 rounded-xl border border-gray-100 p-4 shadow-sm bg-white/80">
+                            <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide">
+                              <Badge variant="outline">
+                                {event?.contentType === "event"
+                                  ? "Live Event"
+                                  : "News Drop"}
+                              </Badge>
+                              <span className="text-gray-500">
+                                {formatDateRange(
+                                  event?.eventStartDate,
+                                  event?.eventEndDate
+                                )}
+                              </span>
+                            </div>
+                            <h3 className="text-lg font-semibold text-shop_dark_green">
+                              {event?.title}
+                            </h3>
+                            <p className="text-sm text-gray-600">
+                              {event?.summary ||
+                                "Interactive session with product experts and customer stories."}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-3 text-sm text-gray-500">
+                              {event?.eventStartDate && (
+                                <span className="inline-flex items-center gap-1">
+                                  <Clock className="h-4 w-4" />
+                                  {dayjs(event.eventStartDate).format(
+                                    "h:mm A"
+                                  )}
+                                </span>
+                              )}
+                              {event?.eventLocation && (
+                                <span className="inline-flex items-center gap-1">
+                                  <MapPin className="h-4 w-4" />
+                                  {event.eventLocation}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {event?.eventRsvpUrl && (
+                                <Button
+                                  size="sm"
+                                  asChild
+                                  className="bg-shop_dark_green hover:bg-shop_light_green"
+                                >
+                                  <Link
+                                    href={event.eventRsvpUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    External RSVP
+                                  </Link>
+                                </Button>
+                              )}
+                              <Button size="sm" variant="outline" asChild>
+                                <Link href={`/news/${event?.slug?.current}`}>
+                                  View details
+                                  <ArrowRight className="ml-2 h-4 w-4" />
+                                </Link>
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-gray-200 p-6 text-center text-gray-600">
+                    No live events right now. We&apos;ll update this timeline
+                    soon.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </Container>
+    </div>
+  );
+};
+
+export default EventsPage;

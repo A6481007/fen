@@ -1,0 +1,287 @@
+"use client";
+import { headerData, type HeaderNavChild } from "@/constants";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import type { FocusEvent } from "react";
+import {
+  BookOpenCheck,
+  Calendar,
+  Download,
+  Megaphone,
+  Sparkles,
+} from "lucide-react";
+
+const HeaderMenu = () => {
+  const pathname = usePathname();
+  const [isNewsOpen, setIsNewsOpen] = useState(false);
+  const newsItem = headerData.find((item) => item.title === "News");
+  const newsChildren = newsItem?.children ?? [];
+
+  useEffect(() => {
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsNewsOpen(false);
+      }
+    };
+
+    if (isNewsOpen) {
+      document.addEventListener("keydown", handleEsc);
+    }
+
+    return () => {
+      document.removeEventListener("keydown", handleEsc);
+    };
+  }, [isNewsOpen]);
+
+  useEffect(() => {
+    setIsNewsOpen(false);
+  }, [pathname]);
+
+  const handleNewsBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const nextFocus = event.relatedTarget as Node | null;
+    if (nextFocus && event.currentTarget.contains(nextFocus)) {
+      return;
+    }
+    setIsNewsOpen(false);
+  };
+
+  return (
+    <div className="hidden md:inline-flex w-full items-center justify-center gap-7 text-sm capitalize font-semibold text-brand-text-muted">
+      {headerData?.map((item) => {
+        const isActive = pathname === item?.href;
+
+        if (item?.title === "News" && newsChildren.length > 0) {
+          return (
+            <div
+              key={item?.title}
+              className="relative flex items-center"
+              onMouseEnter={() => setIsNewsOpen(true)}
+              onMouseLeave={() => setIsNewsOpen(false)}
+              onFocus={() => setIsNewsOpen(true)}
+              onBlur={handleNewsBlur}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setIsNewsOpen(false);
+                }
+              }}
+              tabIndex={0}
+            >
+              <Link
+                href={item?.href}
+                className={`hover:text-brand-text-main hoverEffect relative group px-1 ${isActive && "text-brand-text-main"}`}
+                aria-haspopup="dialog"
+                aria-expanded={isNewsOpen}
+                onClick={() => setIsNewsOpen(false)}
+              >
+                {item?.title}
+                <span
+                  className={`absolute -bottom-0.5 left-1/2 w-0 h-0.5 bg-brand-text-main transition-all duration-300 group-hover:w-1/2 group-hover:left-0 ${
+                    isActive && "w-1/2"
+                  }`}
+                />
+                <span
+                  className={`absolute -bottom-0.5 right-1/2 w-0 h-0.5 bg-brand-text-main transition-all duration-300 group-hover:w-1/2 group-hover:right-0 ${
+                    isActive && "w-1/2"
+                  }`}
+                />
+              </Link>
+
+              {isNewsOpen && (
+                <div
+                  className="absolute left-1/2 top-full z-30 mt-5 w-[820px] -translate-x-1/2 rounded-2xl border border-neutral-200 bg-white/95 p-8 text-left shadow-2xl backdrop-blur focus:outline-none"
+                  role="dialog"
+                  aria-label="News navigation menu"
+                  tabIndex={-1}
+                >
+                  <div className="mb-4 text-xs font-semibold uppercase tracking-[0.35em] text-brand-text-muted">
+                    News & Resources
+                  </div>
+                  <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+                    {renderPrimaryCard(newsChildren, () => setIsNewsOpen(false))}
+                    {renderDownloadCard(newsChildren, () => setIsNewsOpen(false))}
+                    <div className="flex flex-col gap-5">
+                      {renderEventCard(newsChildren, () => setIsNewsOpen(false))}
+                      {renderResourceCard(
+                        newsChildren,
+                        () => setIsNewsOpen(false)
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        }
+
+        return (
+          <Link
+            key={item?.title}
+            href={item?.href}
+            className={`hover:text-brand-text-main hoverEffect relative group ${isActive && "text-brand-text-main"}`}
+          >
+            {item?.title}
+            <span
+              className={`absolute -bottom-0.5 left-1/2 w-0 h-0.5 bg-brand-text-main transition-all duration-300 group-hover:w-1/2 group-hover:left-0 ${
+                isActive && "w-1/2"
+              }`}
+            />
+            <span
+              className={`absolute -bottom-0.5 right-1/2 w-0 h-0.5 bg-brand-text-main transition-all duration-300 group-hover:w-1/2 group-hover:right-0 ${
+                isActive && "w-1/2"
+              }`}
+            />
+          </Link>
+        );
+      })}
+    </div>
+  );
+};
+
+export default HeaderMenu;
+
+const getLinkByKind = (
+  children: HeaderNavChild[],
+  kind: HeaderNavChild["kind"] | undefined
+) => {
+  if (!kind) return undefined;
+  return children.find((child) => child.kind === kind);
+};
+
+const renderPrimaryCard = (
+  children: HeaderNavChild[],
+  closeMenu: () => void
+) => {
+  const primaryLink =
+    getLinkByKind(children, "primary") ?? children.find(() => true);
+
+  if (!primaryLink) return null;
+
+  return (
+    <Card className="relative overflow-hidden border-none bg-gradient-to-br from-brand-text-main/10 via-white to-white shadow-lg">
+      <CardHeader className="pb-4">
+        <Badge className="w-fit bg-brand-text-main text-white hover:bg-brand-text-main">
+          Latest
+        </Badge>
+        <CardTitle className="mt-3 flex items-center gap-2 text-xl text-neutral-900">
+          <Megaphone size={18} className="text-brand-text-main" />
+          {primaryLink.title}
+        </CardTitle>
+        <CardDescription className="text-sm text-neutral-600">
+          {primaryLink.description}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <Link
+          href={primaryLink.href}
+          className="inline-flex items-center text-sm font-semibold text-brand-text-main transition hover:text-brand-text-muted"
+          onClick={closeMenu}
+        >
+          Visit News Hub →
+        </Link>
+      </CardContent>
+    </Card>
+  );
+};
+
+const renderDownloadCard = (
+  children: HeaderNavChild[],
+  closeMenu: () => void
+) => {
+  const downloadLink = getLinkByKind(children, "download");
+  if (!downloadLink) return null;
+
+  return (
+    <Card className="h-full border border-neutral-100 bg-neutral-50/80 shadow-inner">
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-lg text-neutral-900">
+          <Download size={18} className="text-brand-text-main" />
+          {downloadLink.title}
+        </CardTitle>
+        <CardDescription className="text-sm text-neutral-600">
+          {downloadLink.description}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <Link
+          href={downloadLink.href}
+          className="inline-flex items-center text-sm font-semibold text-brand-text-main transition hover:text-brand-text-muted"
+          onClick={closeMenu}
+        >
+          Browse assets →
+        </Link>
+      </CardContent>
+    </Card>
+  );
+};
+
+const renderEventCard = (
+  children: HeaderNavChild[],
+  closeMenu: () => void
+) => {
+  const eventLink = getLinkByKind(children, "event");
+  if (!eventLink) return null;
+
+  return (
+    <Card className="border border-neutral-100 bg-white shadow-sm">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base text-neutral-900">
+          <Calendar size={18} className="text-brand-text-main" />
+          {eventLink.title}
+        </CardTitle>
+        <CardDescription className="text-sm text-neutral-600">
+          {eventLink.description}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <Link
+          href={eventLink.href}
+          className="inline-flex items-center text-sm font-semibold text-brand-text-main transition hover:text-brand-text-muted"
+          onClick={closeMenu}
+        >
+          View events →
+        </Link>
+      </CardContent>
+    </Card>
+  );
+};
+
+const renderResourceCard = (
+  children: HeaderNavChild[],
+  closeMenu: () => void
+) => {
+  const resourceLink = getLinkByKind(children, "resource");
+  if (!resourceLink) return null;
+
+  return (
+    <Card className="border border-neutral-100 bg-white shadow-sm">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base text-neutral-900">
+          <BookOpenCheck size={18} className="text-brand-text-main" />
+          {resourceLink.title}
+        </CardTitle>
+        <CardDescription className="text-sm text-neutral-600">
+          {resourceLink.description}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex items-center justify-between pt-0">
+        <Link
+          href={resourceLink.href}
+          className="inline-flex items-center text-sm font-semibold text-brand-text-main transition hover:text-brand-text-muted"
+          onClick={closeMenu}
+        >
+          Explore resources →
+        </Link>
+        <Sparkles size={16} className="text-amber-500" aria-hidden="true" />
+      </CardContent>
+    </Card>
+  );
+};
