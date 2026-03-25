@@ -3,6 +3,7 @@
 import Container from "@/components/Container";
 import { PromotionAnalyticsBar } from "@/components/promotions/PromotionAnalyticsBar";
 import { PromotionAddToCartButton } from "@/components/promotions/PromotionAddToCartButton";
+import PromotionBundleQuantityControl from "@/components/promotions/PromotionBundleQuantityControl";
 import { PersonalizedOffers, type PersonalizedOffer } from "@/components/promotions/PersonalizedOffers";
 import { PromotionHero } from "@/components/promotions/PromotionHero";
 import PromotionProductsTable from "@/components/promotions/PromotionProductsTable";
@@ -386,7 +387,14 @@ export default function PromotionDetailClient({
                     disabled={!canAutoAdd}
                     className="mt-4 w-full"
                     size="lg"
-                    label={t("client.promotions.detail.addBundle", "Add this bundle")}
+                    label={t("client.promotions.addToCart.cta", "Add to Cart")}
+                    cartLabel={t("client.promotions.addToCart.cta", "Add to Cart")}
+                  />
+                  <PromotionBundleQuantityControl
+                    promotionId={resolvedCampaignId}
+                    items={defaultItems}
+                    disabled={!canAutoAdd}
+                    className="mt-3 w-full"
                   />
                   {!canAutoAdd ? (
                     <p className="mt-2 text-xs text-ink-muted">

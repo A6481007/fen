@@ -21,6 +21,7 @@ export interface PromotionAddToCartButtonProps {
   size?: "sm" | "default" | "lg";
   variant?: "default" | "outline";
   label?: string;
+  cartLabel?: string;
   onSuccess?: (result: { cart: Cart; delta: number }) => void;
 }
 
@@ -34,6 +35,7 @@ export function PromotionAddToCartButton({
   size = "default",
   variant = "default",
   label,
+  cartLabel,
   onSuccess,
 }: PromotionAddToCartButtonProps) {
   const { t } = useTranslation();
@@ -128,7 +130,7 @@ export function PromotionAddToCartButton({
           className="bg-brand-black-strong text-white hover:bg-brand-black-strong/90"
         >
           <ShoppingCart className="h-4 w-4" />
-          <span>{t("client.promotions.addToCart.goToCart", "Go to Cart")}</span>
+          <span>{cartLabel || label || t("client.promotions.addToCart.goToCart", "Go to Cart")}</span>
         </Link>
       </Button>
     );
